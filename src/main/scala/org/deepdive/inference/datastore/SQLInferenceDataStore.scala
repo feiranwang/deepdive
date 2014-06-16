@@ -63,7 +63,8 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
     } catch {
       // SQL cmd exception
       case exception : Throwable =>
-      log.error(exception.toString)
+      // log.error(exception.toString)
+      log.error(exception.getMessage())
       throw exception
     } finally {
       conn.close()
@@ -334,7 +335,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
     // Make the file executable, if necessary
     val file = new java.io.File(cmd)
     if (file.isFile) file.setExecutable(true, false)
-    log.info(s"""Executing: "$cmd" """)
+    log.debug(s"""Executing: "$cmd" """)
     val processLogger = ProcessLogger(line => log.info(line))
     Try(cmd!(processLogger)) match {
       case Success(0) => Success(0)
@@ -372,20 +373,28 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
 
     schema.foreach { case(variable, dataType) =>
       val Array(relation, column) = variable.split('.')
-      
-      val selectVariablesForDumpSQL = s"""
-        SELECT ${relation}.id, (${variable} IS NOT NULL), ${variable}::int, (${VariablesHoldoutTable}.variable_id IS NOT NULL)
-        FROM ${relation} LEFT JOIN ${VariablesHoldoutTable}
-        ON ${relation}.id = ${VariablesHoldoutTable}.variable_id"""
 
       val cardinality = dataType match {
-        case BooleanType => 0
+        case BooleanType => 1
         case MultinomialType(x) => x.toLong
       }
 
+      val customCardinality = cardinality match {
+        case -1 => "cardinality"
+        case _ => cardinality.toString()
+      }
+      
+      val selectVariablesForDumpSQL = s"""
+        SELECT ${relation}.id, (${variable} IS NOT NULL), ${variable}::int, (${VariablesHoldoutTable}.variable_id IS NOT NULL), ${customCardinality}
+        FROM ${relation} LEFT JOIN ${VariablesHoldoutTable}
+        ON ${relation}.id = ${VariablesHoldoutTable}.variable_id"""
+
       dataType match {
-        case BooleanType => variableTypeMap(s"${relation}.${column}") = "Boolean"
-        case MultinomialType(x) => variableTypeMap(s"${relation}.${column}") = "Multinomial"
+        case BooleanType => variableTypeMap(s"${variable}") = "Boolean"
+        case MultinomialType(x) => {
+          if (x == -1) variableTypeMap(s"${variable}") = "Custom"
+          else variableTypeMap(s"${variable}") = "Multinomial"
+        }
       }
 
       issueQuery(selectVariablesForDumpSQL) { rs =>
@@ -405,7 +414,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
           rs.getLong(3),            // initial value
           dataType.toString,        // data type            
           -1,                       // edge count
-          cardinality)              // cardinality
+          rs.getLong(5))              // cardinality
         numVariables += 1
       }
 
@@ -441,16 +450,18 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
         }
         val groundValue : Long = variableTypeMap(variable) match {
           case "Boolean" => 1
-          case "Multinomial" => 0
+          case _ => 0
         }
         
-        if (predicateValue > 0)
+        if (variableTypeMap(variable) == "Custom")
+          null
+        else if (predicateValue > 0)
           "%02d".format(predicateValue)
         else
           "%02d".format(groundValue)
       }
 
-      val cardinalityStr = variables.map(v => getCardinalityStr(v.predicate, s"${v.key}")).mkString(",")
+      val cardinalityStr = variables.map(v => getCardinalityStr(v.predicate, s"${v.key}")).filter(_ != null).mkString(",")
 
       issueQuery(selectInputQueryForDumpSQL) { rs =>
 
@@ -462,8 +473,19 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
         serializer.addFactor(numFactors, weightMap(weightCmd), functionName, variables.length)
 
         variables.zipWithIndex.foreach { case(v, pos) =>
+          val predicate = v.predicateFromData match {
+            case Some(s) => rs.getLong(s)
+            case None => v.predicate match {
+              case Some(p) => p
+              case None => variableTypeMap(v.key) match {
+                case "Boolean" => 1
+                case "Multinomial" => -2
+                case "Custom" => -1
+              }
+            }
+          }
           serializer.addEdge(rs.getLong(s"${v.relation}.id"),
-            numFactors, pos, !v.isNegated, v.predicate.getOrElse(1))
+            numFactors, pos, !v.isNegated, predicate)
           numEdges += 1
         }
 
@@ -480,6 +502,9 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
 
   def groundFactorGraph(schema: Map[String, _ <: VariableDataType], factorDescs: Seq[FactorDesc],
     holdoutFraction: Double, holdoutQuery: Option[String], skipLearning: Boolean, weightTable: String, dbSettings: DbSettings) {
+
+    // variable data type map
+    val variableTypeMap = scala.collection.mutable.Map[String, String]();
 
     // Get Database-related settings
     val dbname = dbSettings.dbname
@@ -554,18 +579,30 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
           """)
       }
 
+      // data type map
+      dataType match {
+        case BooleanType => variableTypeMap(variable) = "Boolean"
+        case MultinomialType(x) => {
+          if (x == -1) variableTypeMap(variable) = "Custom"
+          else variableTypeMap(variable) = "Multinomial"
+        }
+      }
+
       // Create a cardinality table for the variable
       // note we use two-digit fixed-length representation here (may be fixed)
       val cardinalityValues = dataType match {
         case BooleanType => "('01')"
-        case MultinomialType(x) => (0 to x-1).map (n => s"""('${"%02d".format(n)}')""").mkString(", ")
+        case MultinomialType(x) => {
+          if (x == -1) "('00')"
+          else (0 to x-1).map(n => s"""('${"%02d".format(n)}')""").mkString(", ")
+        }
       }
       val cardinalityTableName = s"${relation}_${column}_cardinality"
-      writer.println(s"""
-        DROP TABLE IF EXISTS ${cardinalityTableName} CASCADE;
-        CREATE TABLE ${cardinalityTableName}(cardinality text);
-        INSERT INTO ${cardinalityTableName} VALUES ${cardinalityValues};
-        """)
+        writer.println(s"""
+          DROP TABLE IF EXISTS ${cardinalityTableName} CASCADE;
+          CREATE TABLE ${cardinalityTableName}(cardinality text);
+          INSERT INTO ${cardinalityTableName} VALUES ${cardinalityValues};
+          """)
        
     }
 
@@ -606,8 +643,8 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       def generateWeightCmd(weightPrefix: String, weightVariables: Seq[String], cardinalityValues: Seq[String]) : String = 
       weightVariables.map ( v => s"""(CASE WHEN "${v}" IS NULL THEN '' ELSE "${v}"::text END)""" )
         .mkString(" || ") match {
-        case "" => s"""'${weightPrefix}-' || '-' || ${cardinalityValues.mkString(" || ',' || ")} """
-        case x => s"""'${weightPrefix}-' || ${x} || '-' || ${cardinalityValues.mkString(" || ',' || ")}"""
+        case "" => s"""'${weightPrefix}-' || '-' || ${cardinalityValues.filter(_ != null).mkString(" || ',' || ")} """
+        case x => s"""'${weightPrefix}-' || ${x} || '-' || ${cardinalityValues.filter(_ != null).mkString(" || ',' || ")}"""
       }
 
       // Ground weights for each inference rule
@@ -618,18 +655,15 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
 
       val isFixed = factorDesc.weight.isInstanceOf[KnownFactorWeight]
       val cardinalityValues = factorDesc.func.variables.zipWithIndex.map { case(v,idx) => 
-        s"""_c${idx}.cardinality"""
+        variableTypeMap(v.key) match {
+          case "Custom" => null
+          case _  => s"""_c${idx}.cardinality"""
+        }
       }
       val cardinalityTables = factorDesc.func.variables.zipWithIndex.map { case(v,idx) =>
-        s"${factorDesc.weightPrefix}_cardinality_${idx} AS _c${idx}"
+          s"${factorDesc.weightPrefix}_cardinality_${idx} AS _c${idx}"
       }
 
-      // val cardinalityTables = factorDesc.func.variables.zipWithIndex.map { case(v,idx) =>
-      //     s"${v.headRelation}_${v.field}_cardinality AS c${idx}"
-      // }
-      // val cardinalityValues = factorDesc.func.variables.zipWithIndex.map { case(v,idx) => 
-      //   s"""c${idx}.cardinality"""
-      // }
       val weightCmd = generateWeightCmd(factorDesc.weightPrefix, factorDesc.weight.variables, 
         cardinalityValues)
 
@@ -641,7 +675,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
         """)
 
       factorDesc.func.variables.zipWithIndex.map { case(v,idx) =>
-        // writer.println(s"""DROP TABLE ${factorDesc.weightPrefix}_cardinality_${idx}""")
+        writer.println(s"""DROP TABLE ${factorDesc.weightPrefix}_cardinality_${idx};""")
       }
     }
 

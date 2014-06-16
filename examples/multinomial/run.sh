@@ -4,3 +4,4 @@
 
 cd $DEEPDIVE_HOME
 sbt "run -c $APP_HOME/application.conf"
+#deepdive -c $APP_HOME/application.conf
