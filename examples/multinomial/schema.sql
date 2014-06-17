@@ -21,5 +21,4 @@ INSERT INTO m1(mid, value, cardinality, predicate) VALUES
 INSERT INTO m2(mid, value) VALUES
     (0, 0),
     (1, 0),
-    (2, 1),
-    (3, NULL);
+    (2, NULL);
