@@ -23,7 +23,7 @@ case object BooleanType extends VariableDataType {
   def cardinality = 2
   override def toString() = "Boolean"
 }
-case class MultinomialType(numCategories: Int) extends VariableDataType {
+case class MultinomialType(numCategories: Int, upperBound: Int) extends VariableDataType {
   def cardinality = numCategories
   override def toString() = "Multinomial"
 }

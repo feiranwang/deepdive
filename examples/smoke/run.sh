@@ -9,4 +9,4 @@ bash $APP_HOME/prepare_data.sh
 cd $DEEPDIVE_HOME
 
 # env SBT_OPTS="-Xmx4g" $ROOT_PATH/sbt/sbt "run -c examples/smoke/application.conf"
-deepdive -c $APP_HOME/application.conf
+sbt "run -c $APP_HOME/application.conf"

@@ -40,6 +40,8 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
   def MappedInferenceResultView = "dd_mapped_inference_result"
   def IdSequence = "id_sequence"
 
+  def WeightsTableTemp = "weights_temp"
+
 
   def unwrapSQLType(x: Any) : Any = {
     x match {
@@ -157,6 +159,14 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       description text,
       count bigint);
     ALTER SEQUENCE ${WeightsTable}_id_seq MINVALUE -1 RESTART WITH 0;
+  """
+
+  def createWeightsTempSQL = s"""
+    DROP TABLE IF EXISTS ${WeightsTableTemp} CASCADE;
+    CREATE TABLE ${WeightsTableTemp}(
+      initial_value double precision,
+      is_fixed boolean,
+      description text);
   """
 
   def copyLastWeightsSQL = s"""
@@ -376,8 +386,9 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
 
       val cardinality = dataType match {
         case BooleanType => 1
-        case MultinomialType(x) => x.toLong
+        case MultinomialType(x, y) => x.toLong
       }
+
 
       val customCardinality = cardinality match {
         case -1 => "cardinality"
@@ -385,13 +396,13 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       }
       
       val selectVariablesForDumpSQL = s"""
-        SELECT ${relation}.id, (${variable} IS NOT NULL), ${variable}::int, (${VariablesHoldoutTable}.variable_id IS NOT NULL), ${customCardinality}
+        SELECT ${relation}.id, (${variable} IS NOT NULL), ${variable}::int, (${VariablesHoldoutTable}.variable_id IS NOT NULL), ${customCardinality}, isfixed
         FROM ${relation} LEFT JOIN ${VariablesHoldoutTable}
         ON ${relation}.id = ${VariablesHoldoutTable}.variable_id"""
 
       dataType match {
         case BooleanType => variableTypeMap(s"${variable}") = "Boolean"
-        case MultinomialType(x) => {
+        case MultinomialType(x, y) => {
           if (x == -1) variableTypeMap(s"${variable}") = "Custom"
           else variableTypeMap(s"${variable}") = "Multinomial"
         }
@@ -408,13 +419,19 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
           isEvidence = false
         }
 
+        // use edge count to do something...
+        val edgeCount = rs.getBoolean(6) match {
+          case true => -2
+          case _ => -1
+        }
+
         serializer.addVariable(
           rs.getLong(1),            // id
           isEvidence,               // is evidence
           rs.getLong(3),            // initial value
           dataType.toString,        // data type            
-          -1,                       // edge count
-          rs.getLong(5))              // cardinality
+          edgeCount,                // edge count
+          rs.getLong(5))            // cardinality
         numVariables += 1
       }
 
@@ -582,7 +599,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       // data type map
       dataType match {
         case BooleanType => variableTypeMap(variable) = "Boolean"
-        case MultinomialType(x) => {
+        case MultinomialType(x, y) => {
           if (x == -1) variableTypeMap(variable) = "Custom"
           else variableTypeMap(variable) = "Multinomial"
         }
@@ -592,9 +609,9 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       // note we use two-digit fixed-length representation here (may be fixed)
       val cardinalityValues = dataType match {
         case BooleanType => "('01')"
-        case MultinomialType(x) => {
+        case MultinomialType(x, y) => {
           if (x == -1) "('00')"
-          else (0 to x-1).map(n => s"""('${"%02d".format(n)}')""").mkString(", ")
+          else (0 to y-1).map(n => s"""('${"%02d".format(n)}')""").mkString(", ")
         }
       }
       val cardinalityTableName = s"${relation}_${column}_cardinality"
@@ -640,11 +657,18 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
         }
       }
 
+      // def generateWeightCmd(weightPrefix: String, weightVariables: Seq[String], cardinalityValues: Seq[String]) : String = 
+      // weightVariables.map ( v => s"""(CASE WHEN "${v}" IS NULL THEN '' ELSE "${v}"::text END)""" )
+      //   .mkString(" || ") match {
+      //   case "" => s"""'${weightPrefix}-' || '-' || ${cardinalityValues.filter(_ != null).mkString(" || ',' || ")} """
+      //   case x => s"""'${weightPrefix}-' || ${x} || '-' || ${cardinalityValues.filter(_ != null).mkString(" || ',' || ")}"""
+      // }
+
       def generateWeightCmd(weightPrefix: String, weightVariables: Seq[String], cardinalityValues: Seq[String]) : String = 
       weightVariables.map ( v => s"""(CASE WHEN "${v}" IS NULL THEN '' ELSE "${v}"::text END)""" )
         .mkString(" || ") match {
-        case "" => s"""'${weightPrefix}-' || '-' || ${cardinalityValues.filter(_ != null).mkString(" || ',' || ")} """
-        case x => s"""'${weightPrefix}-' || ${x} || '-' || ${cardinalityValues.filter(_ != null).mkString(" || ',' || ")}"""
+        case "" => s"""'${weightPrefix}-' """
+        case x => s"""'${weightPrefix}-' || ${x}"""
       }
 
       // Ground weights for each inference rule
@@ -660,18 +684,31 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
           case _  => s"""_c${idx}.cardinality"""
         }
       }
+  
       val cardinalityTables = factorDesc.func.variables.zipWithIndex.map { case(v,idx) =>
-          s"${factorDesc.weightPrefix}_cardinality_${idx} AS _c${idx}"
+        s"${factorDesc.weightPrefix}_cardinality_${idx} AS _c${idx}"
       }
 
       val weightCmd = generateWeightCmd(factorDesc.weightPrefix, factorDesc.weight.variables, 
         cardinalityValues)
 
+      val cardinalityCmd = s"""${cardinalityValues.filter(_ != null).mkString(" || ',' || ")}"""
+
+      // create a temporary weight table
+      writer.println(createWeightsTempSQL)
+
       writer.println(s"""
-        INSERT INTO ${WeightsTable}(initial_value, is_fixed, description, count)
-        SELECT ${weightValue} AS wValue, ${isFixed} AS wIsFixed, ${weightCmd} AS wCmd, COUNT(${weightValue})
-        FROM ${factorDesc.name}_query_user, ${cardinalityTables.mkString(", ")}
+        INSERT INTO ${WeightsTableTemp}(initial_value, is_fixed, description)
+        SELECT ${weightValue} AS wValue, ${isFixed} AS wIsFixed, ${weightCmd} AS wCmd
+        FROM ${factorDesc.name}_query_user
         GROUP BY wValue, wIsFixed, wCmd;
+        """)
+
+      writer.println(s"""
+        INSERT INTO ${WeightsTable}(initial_value, is_fixed, description)
+        SELECT w.initial_value, w.is_fixed, (w.description || '-' || ${cardinalityCmd}) as wCmd
+        FROM ${WeightsTableTemp} AS w, ${cardinalityTables.mkString(", ")}
+        ORDER BY wCmd;
         """)
 
       factorDesc.func.variables.zipWithIndex.map { case(v,idx) =>
@@ -751,7 +788,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
     dataType match {
       case BooleanType => 
         execute(createCalibrationViewBooleanSQL(calibrationViewName, bucketedViewName, columnName))
-      case MultinomialType(_) =>
+      case MultinomialType(_, _) =>
         execute(createCalibrationViewMultinomialSQL(calibrationViewName, bucketedViewName, columnName))
     }
     

@@ -30,11 +30,13 @@ psql -c """
 psql -c """
     CREATE TABLE label1(
     wid   INT, val BOOLEAN,
+    isfixed boolean,
     id    BIGINT);
     """ $DB_NAME
 psql -c """
     CREATE TABLE label2(
     wid   INT, val BOOLEAN,
+    isfixed boolean,
     id    BIGINT);
     """ $DB_NAME
 
