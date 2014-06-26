@@ -420,10 +420,15 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
         }
 
         // use edge count to do something...
-        val edgeCount = rs.getBoolean(6) match {
-          case true => -2
-          case _ => -1
+        val upperBound : Long = dataType match {
+          case BooleanType => 1
+          case MultinomialType(x, y) => y.toLong
         }
+        var edgeCount : Long = rs.getBoolean(6) match {
+          case true => 1
+          case _ => 0
+        }
+        edgeCount += (upperBound << 1)
 
         serializer.addVariable(
           rs.getLong(1),            // id
