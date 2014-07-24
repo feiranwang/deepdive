@@ -154,9 +154,10 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
     DROP TABLE IF EXISTS ${WeightsTable} CASCADE;
     CREATE TABLE ${WeightsTable}(
       id bigserial primary key,
-      initial_value double precision,
+      initial_value real,
       is_fixed boolean,
       description text,
+      cardinality_values text,
       count bigint);
     ALTER SEQUENCE ${WeightsTable}_id_seq MINVALUE -1 RESTART WITH 0;
   """
@@ -624,12 +625,11 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
           DROP TABLE IF EXISTS ${cardinalityTableName} CASCADE;
           CREATE TABLE ${cardinalityTableName}(cardinality text);
           INSERT INTO ${cardinalityTableName} VALUES ${cardinalityValues};
-          """)
-       
+          """) 
     }
 
     // Assign the holdout - Random (default) or user-defined query
-    holdoutQuery match {   
+    holdoutQuery match {
       case Some(userQuery) => writer.println(userQuery + ";")
       case None =>
     }
@@ -706,14 +706,21 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
         INSERT INTO ${WeightsTableTemp}(initial_value, is_fixed, description)
         SELECT ${weightValue} AS wValue, ${isFixed} AS wIsFixed, ${weightCmd} AS wCmd
         FROM ${factorDesc.name}_query_user
-        GROUP BY wValue, wIsFixed, wCmd;
+        GROUP BY wCmd;
         """)
 
       writer.println(s"""
-        INSERT INTO ${WeightsTable}(initial_value, is_fixed, description)
-        SELECT w.initial_value, w.is_fixed, (w.description || '-' || ${cardinalityCmd}) as wCmd
+        INSERT INTO ${WeightsTable}(initial_value, is_fixed, description, cardinality_values)
+        SELECT w.initial_value, w.is_fixed, (w.description || '-' || ${cardinalityCmd}) as wCmd, ${cardinalityCmd}
         FROM ${WeightsTableTemp} AS w, ${cardinalityTables.mkString(", ")}
         ORDER BY wCmd;
+        """)
+
+      // parser: set weights to -infinity for rules that are not in training set
+      writer.println(s"""
+        UPDATE ${WeightsTable}
+        SET initial_value = -100000, is_fixed = true
+        WHERE cardinality_values NOT IN (SELECT rule FROM rules);
         """)
 
       factorDesc.func.variables.zipWithIndex.map { case(v,idx) =>
