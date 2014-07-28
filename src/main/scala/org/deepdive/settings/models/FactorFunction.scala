@@ -44,8 +44,13 @@ case class MultinomialFactorFunction(variables: Seq[FactorFunctionVariable]) ext
   override def variableDataType = "Discrete"
 }
 
+/* A custom factor function */
+case class CustomFactorFunction(variables: Seq[FactorFunctionVariable]) extends FactorFunction {
+  override def variableDataType = "Discrete"
+}
+
 /* Dummy factor function */
-case class DummyFactorFunction(val variables: Seq[FactorFunctionVariable]) extends FactorFunction {
+case class DummyFactorFunction(variables: Seq[FactorFunctionVariable]) extends FactorFunction {
   override def variableDataType = "Discrete"
 }
 

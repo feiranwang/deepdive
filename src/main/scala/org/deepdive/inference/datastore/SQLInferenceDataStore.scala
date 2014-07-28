@@ -476,7 +476,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
           case _ => 0
         }
         
-        if (variableTypeMap(variable) == "Custom")
+        if (variableTypeMap(variable) == "Custom" && functionName == "MultinomialFactorFunction")
           null
         else if (predicateValue > 0)
           "%02d".format(predicateValue)
@@ -484,33 +484,60 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
           "%02d".format(groundValue)
       }
 
-      val cardinalityStr = variables.map(v => getCardinalityStr(v.predicate, s"${v.key}")).filter(_ != null).mkString(",")
+      val cardinalityStr = functionName match {
+        case "CustomFactorFunction" => ""
+        case _ => variables.map(v => getCardinalityStr(v.predicate, s"${v.key}")).filter(_ != null).mkString(",")
+      }
 
       issueQuery(selectInputQueryForDumpSQL) { rs =>
 
         val weightCmd = factorDesc.weightPrefix + "-" + factorDesc.weight.variables.map(v => 
           rs.getString(v)).mkString("") + "-" + cardinalityStr
-
         // log.info(weightCmd)
 
-        serializer.addFactor(numFactors, weightMap(weightCmd), functionName, variables.length)
-
-        variables.zipWithIndex.foreach { case(v, pos) =>
-          val predicate = v.predicateFromData match {
-            case Some(s) => rs.getLong(s)
-            case None => v.predicate match {
-              case Some(p) => p
+        var numFactorEdges = 0
+        var pos = 0
+        variables.foreach { case(v) =>
+          if (v.isArray) {
+            val ids = rs.getArray(s"${v.relation}.ids").toString.split(",|\\}|\\{")
+            val predicates = v.predicateFromData match {
+              case Some(s) => rs.getArray(s).toString.split(",|\\}|\\{")
               case None => variableTypeMap(v.key) match {
-                case "Boolean" => 1
-                case "Multinomial" => -2
-                case "Custom" => -1
+                case "Boolean" => Array.fill(ids.length)("1")
+                case "Multinomial" => Array.fill(ids.length)("-2")
+                case "Custom" => Array.fill(ids.length)("-1")
               }
             }
+            for (i <- 0 to ids.length-1) {
+              val id = ids(i)
+              if (id != "") {
+                serializer.addEdge(id.toLong, numFactors, pos, !v.isNegated, 
+                  predicates.asInstanceOf[Array[String]](i).toLong)
+                numEdges += 1
+                pos += 1
+                numFactorEdges += 1
+              }
+            }
+          } else {
+            val predicate = v.predicateFromData match {
+              case Some(s) => rs.getLong(s)
+              case None => v.predicate match {
+                case Some(p) => p
+                case None => variableTypeMap(v.key) match {
+                  case "Boolean" => 1
+                  case "Multinomial" => -2
+                  case "Custom" => -1
+                }
+              }
+            }
+            serializer.addEdge(rs.getLong(s"${v.relation}.id"),
+              numFactors, pos, !v.isNegated, predicate)
+            numEdges += 1
+            pos += 1
+            numFactorEdges += 1
           }
-          serializer.addEdge(rs.getLong(s"${v.relation}.id"),
-            numFactors, pos, !v.isNegated, predicate)
-          numEdges += 1
         }
+        serializer.addFactor(numFactors, weightMap(weightCmd), functionName, numFactorEdges)
 
         numFactors += 1
       }
@@ -625,7 +652,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
           DROP TABLE IF EXISTS ${cardinalityTableName} CASCADE;
           CREATE TABLE ${cardinalityTableName}(cardinality text);
           INSERT INTO ${cardinalityTableName} VALUES ${cardinalityValues};
-          """) 
+          """)
     }
 
     // Assign the holdout - Random (default) or user-defined query
@@ -646,20 +673,24 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       // create cardinality table for each predicate
       factorDesc.func.variables.zipWithIndex.foreach { case(v,idx) => {
         val cardinalityTableName = s"${factorDesc.weightPrefix}_cardinality_${idx}"
-        v.predicate match {
-          case Some(x) => 
-            writer.println(s"""
-              DROP TABLE IF EXISTS ${cardinalityTableName} CASCADE;
+        writer.println(s"""DROP TABLE IF EXISTS ${cardinalityTableName} CASCADE;""")
+        if (v.isArray) {
+          writer.println(s"""
+            CREATE TABLE ${cardinalityTableName}(cardinality text);
+            INSERT INTO ${cardinalityTableName} VALUES ('00');
+            """)
+        } else {
+          v.predicate match {
+            case Some(x) => writer.println(s"""
               CREATE TABLE ${cardinalityTableName}(cardinality text);
               INSERT INTO ${cardinalityTableName} VALUES ('${"%02d".format(x)}');
               """)
-          case None =>
-            writer.println(s"""
-              DROP TABLE IF EXISTS ${cardinalityTableName} CASCADE;
+            case None => writer.println(s"""
               SELECT * INTO ${cardinalityTableName} FROM ${v.headRelation}_${v.field}_cardinality;
               """)
           }
         }
+      }
       }
 
       // def generateWeightCmd(weightPrefix: String, weightVariables: Seq[String], cardinalityValues: Seq[String]) : String = 
@@ -669,7 +700,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       //   case x => s"""'${weightPrefix}-' || ${x} || '-' || ${cardinalityValues.filter(_ != null).mkString(" || ',' || ")}"""
       // }
 
-      def generateWeightCmd(weightPrefix: String, weightVariables: Seq[String], cardinalityValues: Seq[String]) : String = 
+      def generateWeightCmd(weightPrefix: String, weightVariables: Seq[String]) : String = 
       weightVariables.map ( v => s"""(CASE WHEN "${v}" IS NULL THEN '' ELSE "${v}"::text END)""" )
         .mkString(" || ") match {
         case "" => s"""'${weightPrefix}-' """
@@ -683,19 +714,24 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       }
 
       val isFixed = factorDesc.weight.isInstanceOf[KnownFactorWeight]
-      val cardinalityValues = factorDesc.func.variables.zipWithIndex.map { case(v,idx) => 
-        variableTypeMap(v.key) match {
-          case "Custom" => null
-          case _  => s"""_c${idx}.cardinality"""
+      var cardinalityValues = factorDesc.func.variables.zipWithIndex.map { case(v,idx) => 
+        if (v.isArray || (variableTypeMap(v.key) == "Custom" && factorDesc.func.getClass.getSimpleName == "MultinomialFactorFunction")) {
+          null
+        } else {
+           s"""_c${idx}.cardinality"""
         }
+      }
+
+      // for the custom factor function
+      if (factorDesc.func.getClass.getSimpleName == "CustomFactorFunction") {
+        cardinalityValues = Seq[String]("''")
       }
   
       val cardinalityTables = factorDesc.func.variables.zipWithIndex.map { case(v,idx) =>
         s"${factorDesc.weightPrefix}_cardinality_${idx} AS _c${idx}"
       }
 
-      val weightCmd = generateWeightCmd(factorDesc.weightPrefix, factorDesc.weight.variables, 
-        cardinalityValues)
+      val weightCmd = generateWeightCmd(factorDesc.weightPrefix, factorDesc.weight.variables)
 
       val cardinalityCmd = s"""${cardinalityValues.filter(_ != null).mkString(" || ',' || ")}"""
 
@@ -704,29 +740,29 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
 
       writer.println(s"""
         INSERT INTO ${WeightsTableTemp}(initial_value, is_fixed, description)
-        SELECT ${weightValue} AS wValue, ${isFixed} AS wIsFixed, ${weightCmd} AS wCmd
-        FROM ${factorDesc.name}_query_user
-        GROUP BY wCmd;
+        SELECT DISTINCT ${weightValue} AS wValue, ${isFixed} AS wIsFixed, ${weightCmd} AS wCmd
+        FROM ${factorDesc.name}_query_user;
         """)
 
       writer.println(s"""
         INSERT INTO ${WeightsTable}(initial_value, is_fixed, description, cardinality_values)
-        SELECT w.initial_value, w.is_fixed, (w.description || '-' || ${cardinalityCmd}) as wCmd, ${cardinalityCmd}
+        SELECT DISTINCT w.initial_value, w.is_fixed, (w.description || '-' || ${cardinalityCmd}) as wCmd, ${cardinalityCmd}
         FROM ${WeightsTableTemp} AS w, ${cardinalityTables.mkString(", ")}
         ORDER BY wCmd;
         """)
 
-      // parser: set weights to -infinity for rules that are not in training set
-      writer.println(s"""
-        UPDATE ${WeightsTable}
-        SET initial_value = -100000, is_fixed = true
-        WHERE cardinality_values NOT IN (SELECT rule FROM rules);
-        """)
 
       factorDesc.func.variables.zipWithIndex.map { case(v,idx) =>
         writer.println(s"""DROP TABLE ${factorDesc.weightPrefix}_cardinality_${idx};""")
       }
     }
+
+    // parser: set weights to -infinity for rules that are not in training set
+    writer.println(s"""
+      UPDATE ${WeightsTable}
+      SET initial_value = -10, is_fixed = true
+      WHERE description LIKE 'factor_crfcfg%' and cardinality_values NOT IN (SELECT rule FROM rules);
+      """)
 
     // skip learning: choose a table to copy weights from
     if (skipLearning) {
