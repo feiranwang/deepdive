@@ -60,8 +60,10 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
     val stmt = conn.createStatement(java.sql.ResultSet.TYPE_FORWARD_ONLY,
       java.sql.ResultSet.CONCUR_UPDATABLE)
     try {
-      """;\s+""".r.split(sql.trim()).filterNot(_.isEmpty).foreach(q => 
-        conn.prepareStatement(q.trim()).executeUpdate)
+      """;\s+""".r.split(sql.trim()).filterNot(_.isEmpty).foreach{q => 
+        log.info(q)
+        conn.prepareStatement(q.trim()).executeUpdate
+      }
     } catch {
       // SQL cmd exception
       case exception : Throwable =>
@@ -77,6 +79,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
   def issueQuery(sql: String)(op: (java.sql.ResultSet) => Unit) = {
     val conn = ds.borrowConnection()
     try {
+      log.info(sql)
       conn.setAutoCommit(false);
       val stmt = conn.createStatement(java.sql.ResultSet.TYPE_FORWARD_ONLY,
         java.sql.ResultSet.CONCUR_READ_ONLY);
@@ -425,6 +428,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
           case BooleanType => 1
           case MultinomialType(x, y) => y.toLong
         }
+        // is fixed? (observation variables)
         var edgeCount : Long = rs.getBoolean(6) match {
           case true => 1
           case _ => 0
@@ -479,9 +483,9 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
         if (variableTypeMap(variable) == "Custom" && functionName == "MultinomialFactorFunction")
           null
         else if (predicateValue > 0)
-          "%02d".format(predicateValue)
+          "%05d".format(predicateValue)
         else
-          "%02d".format(groundValue)
+          "%05d".format(groundValue)
       }
 
       val cardinalityStr = functionName match {
@@ -639,12 +643,12 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       }
 
       // Create a cardinality table for the variable
-      // note we use two-digit fixed-length representation here (may be fixed)
+      // note we use five-digit fixed-length representation here
       val cardinalityValues = dataType match {
-        case BooleanType => "('01')"
+        case BooleanType => "('00001')"
         case MultinomialType(x, y) => {
-          if (x == -1) "('00')"
-          else (0 to y-1).map(n => s"""('${"%02d".format(n)}')""").mkString(", ")
+          if (x == -1) "('00000')"
+          else (0 to y-1).map(n => s"""('${"%05d".format(n)}')""").mkString(", ")
         }
       }
       val cardinalityTableName = s"${relation}_${column}_cardinality"
@@ -683,7 +687,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
           v.predicate match {
             case Some(x) => writer.println(s"""
               CREATE TABLE ${cardinalityTableName}(cardinality text);
-              INSERT INTO ${cardinalityTableName} VALUES ('${"%02d".format(x)}');
+              INSERT INTO ${cardinalityTableName} VALUES ('${"%05d".format(x)}');
               """)
             case None => writer.println(s"""
               SELECT * INTO ${cardinalityTableName} FROM ${v.headRelation}_${v.field}_cardinality;
@@ -733,6 +737,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
 
       val weightCmd = generateWeightCmd(factorDesc.weightPrefix, factorDesc.weight.variables)
 
+      // cardinality cmd for weight table
       val cardinalityCmd = s"""${cardinalityValues.filter(_ != null).mkString(" || ',' || ")}"""
 
       // create a temporary weight table
@@ -758,11 +763,11 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
     }
 
     // parser: set weights to -infinity for rules that are not in training set
-    writer.println(s"""
-      UPDATE ${WeightsTable}
-      SET initial_value = -10, is_fixed = true
-      WHERE description LIKE 'factor_crfcfg%' and cardinality_values NOT IN (SELECT rule FROM rules);
-      """)
+    // writer.println(s"""
+    //   UPDATE ${WeightsTable}
+    //   SET initial_value = ${sys.env("WEIGHT_RULE_CONSTRAINT")}, is_fixed = true
+    //   WHERE description LIKE 'factor_crfcfg%' and cardinality_values NOT IN (SELECT rule FROM rules);
+    //   """)
 
     // skip learning: choose a table to copy weights from
     if (skipLearning) {
