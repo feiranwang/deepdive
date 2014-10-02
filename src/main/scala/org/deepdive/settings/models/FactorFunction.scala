@@ -7,6 +7,10 @@ sealed trait FactorFunction {
   def variableDataType : String = "Boolean"
   /* The relations used in this factor function */
   def relations = variables.map(_.relation).toSet
+  /* A flag to indicate some custom features 
+   * for multinomial factor: a table indicating custom support
+   */
+  def supportTable: Option[String] = None
 }
 
 /* A factor function of fom A and B and C ... -> Z */
@@ -40,9 +44,14 @@ case class XorFactorFunction(variables: Seq[FactorFunctionVariable]) extends Fac
 }
 
 /* A factor function describing and between all combinations of values for multinomial variables */
-case class MultinomialFactorFunction(variables: Seq[FactorFunctionVariable]) extends FactorFunction {
+case class MultinomialFactorFunction(variables: Seq[FactorFunctionVariable], support: Option[String]) extends FactorFunction {
   override def variableDataType = "Discrete"
+  override def supportTable = support
 }
+
+// case class MultinomialFactorFunction(variables: Seq[FactorFunctionVariable]) extends FactorFunction {
+//   override def variableDataType = "Discrete"
+// }
 
 /* A custom factor function */
 case class CustomFactorFunction(variables: Seq[FactorFunctionVariable]) extends FactorFunction {

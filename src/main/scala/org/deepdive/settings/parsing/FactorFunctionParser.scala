@@ -34,8 +34,16 @@ object FactorFunctionParser extends RegexParsers with Logging {
     IsTrueFactorFunction(List(variable))
   }
 
-  def multinomialFactorFunction = ("Multinomial" | "MULTINOMIAL") ~> "(" ~> rep1sep(factorVariable, ",") <~ ")" ^^ { varList =>
-    MultinomialFactorFunction(varList)
+  // def multinomialFactorFunction = ("Multinomial" | "MULTINOMIAL") ~> "(" ~> rep1sep(factorVariable, ",") <~ ")" ^^ { 
+  //   case (varList) =>
+  //   MultinomialFactorFunction(varList)
+  // }
+
+  // multinomial factor with custom cupport
+  def multinomialFactorFunction = ("Multinomial" | "MULTINOMIAL") ~> ("(" ~> rep1sep(factorVariable, ",") <~ ")") ~
+    ("(" ~> relationOrField <~ ")").? ^^ { 
+    case (varList ~ support) =>
+      MultinomialFactorFunction(varList, support)
   }
 
   def customFactorFunction = ("TreeConstraint") ~> "(" ~> rep1sep(factorVariable, ",") <~ ")" ^^ { varList =>
@@ -59,6 +67,5 @@ object FactorFunctionParser extends RegexParsers with Logging {
 
   def factorFunc = implyFactorFunction | orFactorFunction | andFactorFunction | 
     equalFactorFunction | isTrueFactorFunction | xorFactorFunction | 
-    multinomialFactorFunction | customFactorFunction
-
+    multinomialFactorFunction | customFactorFunction 
 }

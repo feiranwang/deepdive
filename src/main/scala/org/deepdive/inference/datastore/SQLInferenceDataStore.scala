@@ -5,6 +5,7 @@ import org.deepdive.calibration._
 import org.deepdive.datastore.JdbcDataStore
 import org.deepdive.Logging
 import org.deepdive.settings._
+import org.deepdive.Context
 import play.api.libs.json._
 import scalikejdbc._
 import scala.util.matching._
@@ -345,17 +346,16 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
     """
 
 
-  def executeCmd(cmd: String) : Try[Int] = {
+  def executeCmd(cmd: String) : Unit = {
     // Make the file executable, if necessary
     val file = new java.io.File(cmd)
     if (file.isFile) file.setExecutable(true, false)
     log.debug(s"""Executing: "$cmd" """)
     val processLogger = ProcessLogger(line => log.info(line))
-    Try(cmd!(processLogger)) match {
-      case Success(0) => Success(0)
-      case Success(errorExitValue) => 
-        Failure(new RuntimeException(s"Script exited with exit_value=$errorExitValue"))
-      case Failure(ex) => Failure(ex)
+    cmd!(processLogger) match {
+      case 0 => 
+      case _ => 
+        throw new RuntimeException(s"Script failed")
     }
   }
 
@@ -457,9 +457,27 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
 
 
     log.info("Dumping factors...")
+
+    // weightmap file
+    val factorGraphDumpFileWeightMap = new File(s"${Context.outputDir}/graph.weightmap")
+    val weightmapWriter = new PrintWriter(factorGraphDumpFileWeightMap)
+
     factorDescs.foreach { factorDesc =>
       val functionName = factorDesc.func.getClass.getSimpleName
-      
+
+      val isCustomSupport = factorDesc.func.getClass.getSimpleName == "MultinomialFactorFunction" && 
+        factorDesc.func.supportTable.isDefined
+      // let the smallest string be the starting weight description
+      // support table contains a column "val". It is the cardinality values seperated by ",". 
+      // Custom support set does not work with predicates, but if the predicate variable is a
+      // custom cardinality variable, it is ok.
+      var startCardinalityStr = ""
+      if (isCustomSupport) {
+        issueQuery(s"SELECT MIN(val) FROM ${factorDesc.func.supportTable.get}") { rs =>
+          startCardinalityStr = rs.getString(1)
+        }
+      }
+
       log.info(s"Dumping inference ${factorDesc.weightPrefix}...")
 
       val selectInputQueryForDumpSQL = s"""
@@ -488,13 +506,61 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
           "%05d".format(groundValue)
       }
 
-      val cardinalityStr = functionName match {
+      var cardinalityStr = functionName match {
         case "CustomFactorFunction" => ""
+        case "MultinomialFactorFunction" => {
+          if (isCustomSupport) {
+            startCardinalityStr
+          } else {
+            variables.map(v => getCardinalityStr(v.predicate, s"${v.key}")).filter(_ != null).mkString(",")
+          }
+        }
         case _ => variables.map(v => getCardinalityStr(v.predicate, s"${v.key}")).filter(_ != null).mkString(",")
       }
 
+      // dump weight mapping table
+      if (isCustomSupport) {
+
+        // upper bounds for variable in the support set
+        // e.g. for variables a, b, c, with upper bound u1, u2, u3
+        // we use a*u2*u3 + b*u3 + c as key for weightmap
+        val boundList = factorDesc.func.variables.filter(v => variableTypeMap(v.key) == "Multinomial").map { v =>
+            schema(v.key) match {
+              case MultinomialType(x, y) => y.toLong
+            }
+        }
+        val numVar = boundList.length
+        weightmapWriter.println(s"${numVar} ${boundList.mkString(" ")}")
+
+        // count
+        var count = 0L
+        issueQuery(s"SELECT COUNT(*) FROM ${factorDesc.func.supportTable.get}") { rs =>
+          count = rs.getLong(1) + 1 // +1 is for "other"
+        }
+        weightmapWriter.println(count)
+
+        val selectSupportForDumpSQL = s"""
+          SELECT val, row_number() OVER()-1 AS id 
+          FROM (SELECT val FROM ${factorDesc.func.supportTable.get} ORDER BY val) tmp"""
+        issueQuery(selectSupportForDumpSQL) { rs =>
+          // calculate key
+          val cardinalities = rs.getString(1).split(",").map(_.toLong)
+          var key : Long = 0
+          for (i <- 0 to numVar - 1) {
+            key += key * boundList(i) + cardinalities(i)
+          }
+          weightmapWriter.println(s"${key} ${rs.getString(2)}")
+          // weightmapWriter.println(s"${rs.getString(1)} ${rs.getString(2)}")
+        }
+        // insert weight map for other possible worlds
+        weightmapWriter.println(s"-1 ${count}")
+
+      }
+
+
       issueQuery(selectInputQueryForDumpSQL) { rs =>
 
+        // generate weight description
         val weightCmd = factorDesc.weightPrefix + "-" + factorDesc.weight.variables.map(v => 
           rs.getString(v)).mkString("") + "-" + cardinalityStr
         // log.info(weightCmd)
@@ -552,14 +618,12 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       weightsPath, variablesPath, factorsPath, edgesPath)
 
     serializer.close()
+    weightmapWriter.close()
+
+
   }
 
-  def groundFactorGraph(schema: Map[String, _ <: VariableDataType], factorDescs: Seq[FactorDesc],
-    holdoutFraction: Double, holdoutQuery: Option[String], skipLearning: Boolean, weightTable: String, dbSettings: DbSettings) {
-
-    // variable data type map
-    val variableTypeMap = scala.collection.mutable.Map[String, String]();
-
+  def generatePsqlCmdString(dbSettings: DbSettings, sql: String) : String = {
     // Get Database-related settings
     val dbname = dbSettings.dbname
     val pguser = dbSettings.user
@@ -582,6 +646,15 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       case null => ""
       case _ => s" -h ${pghost} "
     }
+
+    "psql " + dbnameStr + pguserStr + pgportStr + pghostStr + " -c " + "\"\"\"" + sql + "\"\"\""
+  }
+
+  def groundFactorGraph(schema: Map[String, _ <: VariableDataType], factorDescs: Seq[FactorDesc],
+    holdoutFraction: Double, holdoutQuery: Option[String], skipLearning: Boolean, weightTable: String, dbSettings: DbSettings) {
+
+    // variable data type map
+    val variableTypeMap = scala.collection.mutable.Map[String, String]();
 
     // We write the grounding queries to this SQL file
     val sqlFile = File.createTempFile(s"grounding", ".sql")
@@ -608,8 +681,8 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
 
     // assign id
     if (usingGreenplum) {
-      val createAssignIdPrefix = "psql " + dbnameStr + pguserStr + pgportStr + pghostStr + " -c " + "\"\"\""
-      assignidWriter.println(createAssignIdPrefix + createAssignIdFunctionSQL + "\"\"\"")
+      val createAssignIdPrefix = generatePsqlCmdString(dbSettings, createAssignIdFunctionSQL)
+      assignidWriter.println(createAssignIdPrefix)
     } else {
       writer.println(createSequencesSQL)
     }
@@ -620,8 +693,8 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       val Array(relation, column) = variable.split('.')
 
       if (usingGreenplum) {
-        val assignIdSQL = "psql " + dbnameStr + pguserStr + pgportStr + pghostStr + " -c " + "\"\"\"" +
-          s""" SELECT fast_seqassign('${relation}', ${idoffset});""" + "\"\"\""
+        val assignIdSQL = generatePsqlCmdString(dbSettings, 
+          s""" SELECT fast_seqassign('${relation}', ${idoffset});""")
         assignidWriter.println(assignIdSQL)
         val getOffset = s"SELECT count(*) FROM ${relation};"
         issueQuery(getOffset) { rs =>
@@ -674,6 +747,10 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
         CREATE VIEW ${factorDesc.name}_query_user AS ${factorDesc.inputQuery};
         """)
 
+      // boolean is custom support set for multinomial
+      val isCustomSupport = factorDesc.func.getClass.getSimpleName == "MultinomialFactorFunction" && 
+        factorDesc.func.supportTable.isDefined
+
       // create cardinality table for each predicate
       factorDesc.func.variables.zipWithIndex.foreach { case(v,idx) => {
         val cardinalityTableName = s"${factorDesc.weightPrefix}_cardinality_${idx}"
@@ -681,7 +758,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
         if (v.isArray) {
           writer.println(s"""
             CREATE TABLE ${cardinalityTableName}(cardinality text);
-            INSERT INTO ${cardinalityTableName} VALUES ('00');
+            INSERT INTO ${cardinalityTableName} VALUES ('00000');
             """)
         } else {
           v.predicate match {
@@ -729,10 +806,18 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       // for the custom factor function
       if (factorDesc.func.getClass.getSimpleName == "CustomFactorFunction") {
         cardinalityValues = Seq[String]("''")
+      } else if (isCustomSupport) {
+        // cardinality values are from a support table 
+        cardinalityValues = Seq[String](s"s.val")
       }
-  
-      val cardinalityTables = factorDesc.func.variables.zipWithIndex.map { case(v,idx) =>
-        s"${factorDesc.weightPrefix}_cardinality_${idx} AS _c${idx}"
+      
+      var cardinalityTables = factorDesc.func.variables.zipWithIndex.map { case(v,idx) =>
+          s"${factorDesc.weightPrefix}_cardinality_${idx} AS _c${idx}"
+      }
+
+      // custom support table
+      if (isCustomSupport) {
+        cardinalityTables = Seq[String](s"(SELECT val FROM ${factorDesc.func.supportTable.get} UNION SELECT 'other') s")
       }
 
       val weightCmd = generateWeightCmd(factorDesc.weightPrefix, factorDesc.weight.variables)
@@ -756,18 +841,17 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
         ORDER BY wCmd;
         """)
 
-
       factorDesc.func.variables.zipWithIndex.map { case(v,idx) =>
         writer.println(s"""DROP TABLE ${factorDesc.weightPrefix}_cardinality_${idx};""")
       }
     }
 
     // parser: set weights to -infinity for rules that are not in training set
-    // writer.println(s"""
-    //   UPDATE ${WeightsTable}
-    //   SET initial_value = ${sys.env("WEIGHT_RULE_CONSTRAINT")}, is_fixed = true
-    //   WHERE description LIKE 'factor_crfcfg%' and cardinality_values NOT IN (SELECT rule FROM rules);
-    //   """)
+    writer.println(s"""
+      UPDATE ${WeightsTable}
+      SET initial_value = ${sys.env("WEIGHT_RULE_CONSTRAINT")}, is_fixed = true
+      WHERE description LIKE 'factor_crfcfg%' and cardinality_values NOT IN (SELECT rule FROM rules);
+      """)
 
     // skip learning: choose a table to copy weights from
     if (skipLearning) {

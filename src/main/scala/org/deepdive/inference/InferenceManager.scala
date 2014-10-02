@@ -39,6 +39,7 @@ trait InferenceManager extends Actor with ActorLogging {
   lazy val factorGraphDumpFileEdges = new File(s"${Context.outputDir}/graph.edges")
   lazy val factorGraphDumpFileMeta = new File(s"${Context.outputDir}/graph.meta.csv")
   lazy val SamplingOutputDir = new File(s"${Context.outputDir}")
+  lazy val factorGraphDumpFileWeightmap = new File(s"${Context.outputDir}/graph.weightmap")
   lazy val SamplingOutputFile = new File(s"${SamplingOutputDir}/inference_result.out")
   lazy val SamplingOutputFileWeights = new File(s"${SamplingOutputDir}/inference_result.out.weights")
 
@@ -112,7 +113,8 @@ trait InferenceManager extends Actor with ActorLogging {
     val samplingResult = sampler ? Sampler.Run(samplerJavaArgs, samplerOptions,
       factorGraphDumpFileWeights.getCanonicalPath, factorGraphDumpFileVariables.getCanonicalPath,
       factorGraphDumpFileFactors.getCanonicalPath, factorGraphDumpFileEdges.getCanonicalPath,
-      factorGraphDumpFileMeta.getCanonicalPath, SamplingOutputDir.getCanonicalPath)
+      factorGraphDumpFileMeta.getCanonicalPath, SamplingOutputDir.getCanonicalPath,
+      factorGraphDumpFileWeightmap.getCanonicalPath)
     // Kill the sampler after it's done :)
     sampler ! PoisonPill
     samplingResult.map { x =>
