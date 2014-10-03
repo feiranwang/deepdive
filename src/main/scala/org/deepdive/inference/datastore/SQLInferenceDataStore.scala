@@ -535,7 +535,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
         // count
         var count = 0L
         issueQuery(s"SELECT COUNT(*) FROM ${factorDesc.func.supportTable.get}") { rs =>
-          count = rs.getLong(1) + 1 // +1 is for "other"
+          count = rs.getLong(1)
         }
         weightmapWriter.println(count)
 
@@ -547,8 +547,11 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
           val cardinalities = rs.getString(1).split(",").map(_.toLong)
           var key : Long = 0
           for (i <- 0 to numVar - 1) {
-            key += key * boundList(i) + cardinalities(i)
+            key = key * boundList(i) + cardinalities(i)
           }
+          // log.info("===================")
+          // log.info(rs.getString(1))
+          // log.info(s"key = ${key} val = ${rs.getString(2)}")
           weightmapWriter.println(s"${key} ${rs.getString(2)}")
           // weightmapWriter.println(s"${rs.getString(1)} ${rs.getString(2)}")
         }
