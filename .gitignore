@@ -9,6 +9,7 @@ out/
 out/
 hsql:*
 *.pyc
+*.json
 
 /lib/dw_mac
 /lib/dw_linux

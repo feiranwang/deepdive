@@ -53,8 +53,8 @@ case class MultinomialFactorFunction(variables: Seq[FactorFunctionVariable], sup
 //   override def variableDataType = "Discrete"
 // }
 
-/* A custom factor function */
-case class CustomFactorFunction(variables: Seq[FactorFunctionVariable]) extends FactorFunction {
+/* A factor function for tree constraints (parser) */
+case class TreeConstraintFactorFunction(variables: Seq[FactorFunctionVariable]) extends FactorFunction {
   override def variableDataType = "Discrete"
 }
 

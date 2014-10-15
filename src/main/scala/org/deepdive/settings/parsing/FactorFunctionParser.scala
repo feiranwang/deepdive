@@ -46,8 +46,8 @@ object FactorFunctionParser extends RegexParsers with Logging {
       MultinomialFactorFunction(varList, support)
   }
 
-  def customFactorFunction = ("TreeConstraint") ~> "(" ~> rep1sep(factorVariable, ",") <~ ")" ^^ { varList =>
-    CustomFactorFunction(varList)
+  def treeConstraintFactorFunction = ("TreeConstraint") ~> "(" ~> rep1sep(factorVariable, ",") <~ ")" ^^ { varList =>
+    TreeConstraintFactorFunction(varList)
   }
 
   
@@ -67,5 +67,5 @@ object FactorFunctionParser extends RegexParsers with Logging {
 
   def factorFunc = implyFactorFunction | orFactorFunction | andFactorFunction | 
     equalFactorFunction | isTrueFactorFunction | xorFactorFunction | 
-    multinomialFactorFunction | customFactorFunction 
+    multinomialFactorFunction | treeConstraintFactorFunction 
 }

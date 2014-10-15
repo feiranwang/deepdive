@@ -507,7 +507,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       }
 
       var cardinalityStr = functionName match {
-        case "CustomFactorFunction" => ""
+        case "TreeConstraintFactorFunction" => ""
         case "MultinomialFactorFunction" => {
           if (isCustomSupport) {
             startCardinalityStr
@@ -807,7 +807,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       }
 
       // for the custom factor function
-      if (factorDesc.func.getClass.getSimpleName == "CustomFactorFunction") {
+      if (factorDesc.func.getClass.getSimpleName == "TreeConstraintFactorFunction") {
         cardinalityValues = Seq[String]("''")
       } else if (isCustomSupport) {
         // cardinality values are from a support table 
