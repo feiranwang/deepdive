@@ -50,6 +50,10 @@ object FactorFunctionParser extends RegexParsers with Logging {
     TreeConstraintFactorFunction(varList)
   }
 
+  def parentLabelConstraintFactorFunction = ("ParentLabelConstraint") ~> "(" ~> rep1sep(factorVariable, ",") <~ ")" ^^ { varList =>
+    TreeConstraintFactorFunction(varList)
+  }
+
   
   def factorVariable = ("!"?) ~ rep1sep(relationOrField, ".") ~ (arrayDefinition?) ~ 
     (("=" ~> integer)?) ~ (("==" ~> relationOrField)?) ^^ { 
@@ -67,5 +71,6 @@ object FactorFunctionParser extends RegexParsers with Logging {
 
   def factorFunc = implyFactorFunction | orFactorFunction | andFactorFunction | 
     equalFactorFunction | isTrueFactorFunction | xorFactorFunction | 
-    multinomialFactorFunction | treeConstraintFactorFunction 
+    multinomialFactorFunction | treeConstraintFactorFunction |
+    parentLabelConstraintFactorFunction
 }

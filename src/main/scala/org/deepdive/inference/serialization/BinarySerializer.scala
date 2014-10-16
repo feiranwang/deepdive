@@ -46,6 +46,7 @@ class BinarySerializer(weightsOutput: OutputStream, variablesOutput: OutputStrea
       case "IsTrueFactorFunction" =>  4
       case "MultinomialFactorFunction" => 5
       case "TreeConstraintFactorFunction" => 6
+      case "ParentLabelConstraintFactorFunction" => 7
     }
     factorStream.writeLong(factorId)
     factorStream.writeLong(weightId)

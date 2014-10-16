@@ -507,7 +507,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       }
 
       var cardinalityStr = functionName match {
-        case "TreeConstraintFactorFunction" => ""
+        case "TreeConstraintFactorFunction" | "ParentLabelConstraintFactorFunction" => ""
         case "MultinomialFactorFunction" => {
           if (isCustomSupport) {
             startCardinalityStr
@@ -798,7 +798,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       }
 
       val isFixed = factorDesc.weight.isInstanceOf[KnownFactorWeight]
-      var cardinalityValues = factorDesc.func.variables.zipWithIndex.map { case(v,idx) => 
+      val cardinalityValues = factorDesc.func.variables.zipWithIndex.map { case(v,idx) => 
         if (v.isArray || (variableTypeMap(v.key) == "Custom" && factorDesc.func.getClass.getSimpleName == "MultinomialFactorFunction")) {
           null
         } else {
@@ -806,13 +806,14 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
         }
       }
 
-      // for the custom factor function
-      if (factorDesc.func.getClass.getSimpleName == "TreeConstraintFactorFunction") {
-        cardinalityValues = Seq[String]("''")
-      } else if (isCustomSupport) {
-        // cardinality values are from a support table 
-        cardinalityValues = Seq[String](s"s.val")
-      }
+      // // for the tree constraint factor function
+      // if (factorDesc.func.getClass.getSimpleName == "TreeConstraintFactorFunction" ||
+      //   factorDesc.func.getClass.getSimpleName == "parentLabelConstraintFactorFunction") {
+      //   cardinalityValues = Seq[String]("''")
+      // } else if (isCustomSupport) {
+      //   // cardinality values are from a support table 
+      //   cardinalityValues = Seq[String](s"s.val")
+      // }
       
       var cardinalityTables = factorDesc.func.variables.zipWithIndex.map { case(v,idx) =>
           s"${factorDesc.weightPrefix}_cardinality_${idx} AS _c${idx}"
@@ -826,7 +827,15 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       val weightCmd = generateWeightCmd(factorDesc.weightPrefix, factorDesc.weight.variables)
 
       // cardinality cmd for weight table
-      val cardinalityCmd = s"""${cardinalityValues.filter(_ != null).mkString(" || ',' || ")}"""
+      var cardinalityCmd = s"""${cardinalityValues.filter(_ != null).mkString(" || ',' || ")}"""
+
+      // note treeconstraint and parentLabelConstraint only has one weight, no cardinality related weights
+      if (factorDesc.func.getClass.getSimpleName == "TreeConstraintFactorFunction" ||
+        factorDesc.func.getClass.getSimpleName == "parentLabelConstraintFactorFunction") {
+        cardinalityCmd = "''"
+      } else if (isCustomSupport) {
+        cardinalityCmd = "s.val"
+      }
 
       // create a temporary weight table
       writer.println(createWeightsTempSQL)

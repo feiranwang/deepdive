@@ -58,6 +58,11 @@ case class TreeConstraintFactorFunction(variables: Seq[FactorFunctionVariable]) 
   override def variableDataType = "Discrete"
 }
 
+/* A factor function for parent label constraints (parser) */
+case class ParentLabelConstraintFactorFunction(variables: Seq[FactorFunctionVariable]) extends FactorFunction {
+  override def variableDataType = "Discrete"
+}
+
 /* Dummy factor function */
 case class DummyFactorFunction(variables: Seq[FactorFunctionVariable]) extends FactorFunction {
   override def variableDataType = "Discrete"
