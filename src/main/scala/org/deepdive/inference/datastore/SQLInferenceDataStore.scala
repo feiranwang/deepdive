@@ -465,15 +465,14 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
     factorDescs.foreach { factorDesc =>
       val functionName = factorDesc.func.getClass.getSimpleName
 
-      val isCustomSupport = factorDesc.func.getClass.getSimpleName == "MultinomialFactorFunction" && 
-        factorDesc.func.supportTable.isDefined
+      val isCustomSupport = factorDesc.func.getClass.getSimpleName == "MultinomialFactorFunctionWithSupport"
       // let the smallest string be the starting weight description
       // support table contains a column "val". It is the cardinality values seperated by ",". 
       // Custom support set does not work with predicates, but if the predicate variable is a
       // custom cardinality variable, it is ok.
       var startCardinalityStr = ""
       if (isCustomSupport) {
-        issueQuery(s"SELECT MIN(val) FROM ${factorDesc.func.supportTable.get}") { rs =>
+        issueQuery(s"SELECT MIN(val) FROM ${factorDesc.func.supportTable}") { rs =>
           startCardinalityStr = rs.getString(1)
         }
       }
@@ -508,13 +507,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
 
       var cardinalityStr = functionName match {
         case "TreeConstraintFactorFunction" | "ParentLabelConstraintFactorFunction" => ""
-        case "MultinomialFactorFunction" => {
-          if (isCustomSupport) {
-            startCardinalityStr
-          } else {
-            variables.map(v => getCardinalityStr(v.predicate, s"${v.key}")).filter(_ != null).mkString(",")
-          }
-        }
+        case "MultinomialFactorFunctionWithSupport" => startCardinalityStr
         case _ => variables.map(v => getCardinalityStr(v.predicate, s"${v.key}")).filter(_ != null).mkString(",")
       }
 
@@ -534,14 +527,14 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
 
         // count
         var count = 0L
-        issueQuery(s"SELECT COUNT(*) FROM ${factorDesc.func.supportTable.get}") { rs =>
+        issueQuery(s"SELECT COUNT(*) FROM ${factorDesc.func.supportTable}") { rs =>
           count = rs.getLong(1)
         }
         weightmapWriter.println(count)
 
         val selectSupportForDumpSQL = s"""
           SELECT val, row_number() OVER()-1 AS id 
-          FROM (SELECT val FROM ${factorDesc.func.supportTable.get} ORDER BY val) tmp"""
+          FROM (SELECT val FROM ${factorDesc.func.supportTable} ORDER BY val) tmp"""
         issueQuery(selectSupportForDumpSQL) { rs =>
           // calculate key
           val cardinalities = rs.getString(1).split(",").map(_.toLong)
@@ -751,8 +744,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
         """)
 
       // boolean is custom support set for multinomial
-      val isCustomSupport = factorDesc.func.getClass.getSimpleName == "MultinomialFactorFunction" && 
-        factorDesc.func.supportTable.isDefined
+      val isCustomSupport = factorDesc.func.getClass.getSimpleName == "MultinomialFactorFunctionWithSupport"
 
       // create cardinality table for each predicate
       factorDesc.func.variables.zipWithIndex.foreach { case(v,idx) => {
@@ -821,7 +813,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
 
       // custom support table
       if (isCustomSupport) {
-        cardinalityTables = Seq[String](s"(SELECT val FROM ${factorDesc.func.supportTable.get} UNION SELECT 'other') s")
+        cardinalityTables = Seq[String](s"(SELECT val FROM ${factorDesc.func.supportTable} UNION SELECT 'other') s")
       }
 
       val weightCmd = generateWeightCmd(factorDesc.weightPrefix, factorDesc.weight.variables)

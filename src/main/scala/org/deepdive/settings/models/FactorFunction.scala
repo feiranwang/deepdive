@@ -10,7 +10,7 @@ sealed trait FactorFunction {
   /* A flag to indicate some custom features 
    * for multinomial factor: a table indicating custom support
    */
-  def supportTable: Option[String] = None
+  def supportTable: String = ""
 }
 
 /* A factor function of fom A and B and C ... -> Z */
@@ -43,15 +43,22 @@ case class XorFactorFunction(variables: Seq[FactorFunctionVariable]) extends Fac
   override def variableDataType = "Boolean"
 }
 
+// /* A factor function describing and between all combinations of values for multinomial variables */
+// case class MultinomialFactorFunction(variables: Seq[FactorFunctionVariable], support: Option[String]) extends FactorFunction {
+//   override def variableDataType = "Discrete"
+//   override def supportTable = support
+// }
+
 /* A factor function describing and between all combinations of values for multinomial variables */
-case class MultinomialFactorFunction(variables: Seq[FactorFunctionVariable], support: Option[String]) extends FactorFunction {
+case class MultinomialFactorFunctionWithSupport(variables: Seq[FactorFunctionVariable], support: String) extends FactorFunction {
   override def variableDataType = "Discrete"
   override def supportTable = support
 }
 
-// case class MultinomialFactorFunction(variables: Seq[FactorFunctionVariable]) extends FactorFunction {
-//   override def variableDataType = "Discrete"
-// }
+/* A factor function describing and between all combinations of values for multinomial variables */
+case class MultinomialFactorFunction(variables: Seq[FactorFunctionVariable]) extends FactorFunction {
+  override def variableDataType = "Discrete"
+}
 
 /* A factor function for tree constraints (parser) */
 case class TreeConstraintFactorFunction(variables: Seq[FactorFunctionVariable]) extends FactorFunction {

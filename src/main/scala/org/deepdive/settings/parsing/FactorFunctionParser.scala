@@ -34,16 +34,23 @@ object FactorFunctionParser extends RegexParsers with Logging {
     IsTrueFactorFunction(List(variable))
   }
 
-  // def multinomialFactorFunction = ("Multinomial" | "MULTINOMIAL") ~> "(" ~> rep1sep(factorVariable, ",") <~ ")" ^^ { 
-  //   case (varList) =>
-  //   MultinomialFactorFunction(varList)
+  def multinomialFactorFunction = ("Multinomial" | "MULTINOMIAL") ~> "(" ~> rep1sep(factorVariable, ",") <~ ")" ^^ { 
+    case (varList) =>
+    MultinomialFactorFunction(varList)
+  }
+
+  // // multinomial factor with custom cupport
+  // def multinomialFactorFunction = ("Multinomial" | "MULTINOMIAL") ~> ("(" ~> rep1sep(factorVariable, ",") <~ ")") ~
+  //   ("(" ~> relationOrField <~ ")").? ^^ { 
+  //   case (varList ~ support) =>
+  //     MultinomialFactorFunction(varList, support)
   // }
 
   // multinomial factor with custom cupport
-  def multinomialFactorFunction = ("Multinomial" | "MULTINOMIAL") ~> ("(" ~> rep1sep(factorVariable, ",") <~ ")") ~
-    ("(" ~> relationOrField <~ ")").? ^^ { 
+  def multinomialFactorFunctionWithSupport = ("MultinomialWithSupport" | "MULTINOMIALWITHSUPPORT") ~> ("(" ~> rep1sep(factorVariable, ",") <~ ")") ~
+    ("(" ~> relationOrField <~ ")") ^^ { 
     case (varList ~ support) =>
-      MultinomialFactorFunction(varList, support)
+      MultinomialFactorFunctionWithSupport(varList, support)
   }
 
   def treeConstraintFactorFunction = ("TreeConstraint") ~> "(" ~> rep1sep(factorVariable, ",") <~ ")" ^^ { varList =>
@@ -72,5 +79,5 @@ object FactorFunctionParser extends RegexParsers with Logging {
   def factorFunc = implyFactorFunction | orFactorFunction | andFactorFunction | 
     equalFactorFunction | isTrueFactorFunction | xorFactorFunction | 
     multinomialFactorFunction | treeConstraintFactorFunction |
-    parentLabelConstraintFactorFunction
+    parentLabelConstraintFactorFunction | multinomialFactorFunctionWithSupport
 }

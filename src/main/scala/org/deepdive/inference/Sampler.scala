@@ -49,7 +49,7 @@ class Sampler extends Actor with ActorLogging {
       "-e", edgesFile,
       "-m", metaFile,
       "-o", outputDir
-      //,"-g", weightmapFile
+      ,"-g", weightmapFile
       ) ++ samplerOptions.split(" ")
   }
 
