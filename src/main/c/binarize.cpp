@@ -43,6 +43,7 @@ void load_var(std::string filename){
   edge_count = bswap_64(edge_count);
 
   while(fin >> vid >> is_evidence >> initial_value >> type >> cardinality){
+    int _type = type;
     // endianess
     vid = bswap_64(vid);
     uint64_t initval = bswap_64(*(uint64_t *)&initial_value);
@@ -56,6 +57,23 @@ void load_var(std::string filename){
     fout.write((char*)&type, 2);
     fout.write((char *)&edge_count, 8);
     fout.write((char*)&cardinality, 8);
+    // tree node variables
+    if (_type == 4) {
+      long treeid;
+      short dim;
+      std::vector<int> spans;
+      fin >> treeid >> dim;
+      fout.write((char*)&treeid, 8);
+      fout.write((char*)&dim, 2);
+      // std::cout << "treeid = " << treeid << " dimension = " << dim << std::endl;
+      for (int j = 0; j < dim; j++) {
+        int start, length;
+        fin >> start >> length;
+        // std::cout << "start = " << start << " length = " << length << std::endl;
+        fout.write((char*)&start, 4);
+        fout.write((char*)&length, 4);
+      }
+    }
   }
 
   fin.close();

@@ -36,3 +36,8 @@ case class RealArrayType(nNumber: Int) extends VariableDataType {
   def nele = nNumber
   override def toString() = "RealNumberArray"
 }
+
+case class TreeNodeType(numCategories: Int, nDimension: Int) extends VariableDataType {
+  def cardinality = numCategories
+  override def toString() = "TreeNode"
+}

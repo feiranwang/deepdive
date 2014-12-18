@@ -559,6 +559,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
         case MultinomialType(x) => 1
         case RealNumberType => 2
         case RealArrayType(x) => 3
+        case TreeNodeType(x, y) => 4
       }
 
       val cardinality = dataType match {
@@ -566,6 +567,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
         case MultinomialType(x) => x.toInt
         case RealNumberType => 2
         case RealArrayType(x) => x.toInt
+        case TreeNodeType(x, y) => x.toInt
       }
 
       if(variableDataType == 2 || variableDataType == 3){
@@ -591,6 +593,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
         case MultinomialType(x) => (0 to x-1).map (n => s"""('${"%05d".format(n)}')""").mkString(", ")
         case RealNumberType => "('00001')"
         case RealArrayType(x) => "('00001')"
+        case TreeNodeType(x, y) => (0 to x-1).map (n => s"""('${"%05d".format(n)}')""").mkString(", ")
       }
       val cardinalityTableName = s"${relation}_${column}_cardinality"
       execute(s"""
@@ -632,11 +635,19 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
         case 2 | 3 => cast(column, "float")
         case _ => cast(cast(column, "int"), "float")
       }
+      // tree node variables
+      val treeNodeCols = dataType match {
+        case TreeNodeType(x, y) => 
+          "treeid, " + y + ", " + (1 to y.toInt).map(i => s"start${i}, length${i}").mkString(", ")
+        case _ => ""
+      }
+
       du.unload(s"dd_variables_${relation}", s"${groundingPath}/dd_variables_${relation}",
         dbSettings, parallelGrounding,
         s"""SELECT t0.id, t1.${variableTypeColumn},
         CASE WHEN t1.${variableTypeColumn} = 0 THEN 0 ELSE ${initvalueCast} END AS initvalue,
-        ${variableDataType} AS type, ${cardinality} AS cardinality
+        ${variableDataType} AS type, ${cardinality} AS cardinality, 
+        ${treeNodeCols}
         FROM ${relation} t0, ${relation}_vtype t1
         WHERE t0.id=t1.id
         """)
@@ -907,6 +918,13 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
     du.unload("dd_weights", s"${groundingPath}/dd_weights",dbSettings, parallelGrounding,
       s"SELECT id, isfixed, COALESCE(initvalue, 0) FROM ${WeightsTable}")
 
+    // CFG rules
+    val cfgRuleQuery = calibrationSettings.cfgRuleQuery.getOrElse("")
+    if (calibrationSettings.cfgRuleQuery.isDefined) {
+      du.unload("cfg_rules", s"${groundingPath}/cfg_rules", dbSettings, parallelGrounding,
+        cfgRuleQuery)
+    }
+
     // create inference result table
     execute(createInferenceResultSQL)
     execute(createInferenceResultWeightsSQL)
@@ -991,6 +1009,8 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       case BooleanType => 
         execute(createCalibrationViewBooleanSQL(calibrationViewName, bucketedViewName, columnName))
       case MultinomialType(_) =>
+        execute(createCalibrationViewMultinomialSQL(calibrationViewName, bucketedViewName, columnName))
+      case TreeNodeType(_, _) =>
         execute(createCalibrationViewMultinomialSQL(calibrationViewName, bucketedViewName, columnName))
       case RealNumberType =>
         execute(WRONGcreateCalibrationViewRealNumberSQL(calibrationViewName, bucketedViewName, columnName))
