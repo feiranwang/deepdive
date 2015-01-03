@@ -638,7 +638,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       // tree node variables
       val treeNodeCols = dataType match {
         case TreeNodeType(x, y) => 
-          "treeid, " + y + ", " + (1 to y.toInt).map(i => s"start${i}, length${i}").mkString(", ")
+          "treeid, " + y + ", " + (1 to y.toInt).map(i => s"start${i}, end${i}").mkString(", ")
         case _ => ""
       }
 
@@ -651,6 +651,15 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
         FROM ${relation} t0, ${relation}_vtype t1
         WHERE t0.id=t1.id
         """)
+
+      // tree node
+      if (variableDataType == 4) {
+        du.unload(s"dd_ntrees", s"${groundingPath}/dd_ntrees",
+          dbSettings, parallelGrounding,
+          s"""SELECT count(distinct treeid)
+          FROM ${relation}
+          """)
+      }
 
     }
 

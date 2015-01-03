@@ -73,8 +73,8 @@ os.system("awk '{{ sum += $1 }} END {{ printf \"%.0f\\n\", sum }}' {0}/dd_nedges
 
 # concatenate files
 print "CONCATENATING FILES..."
-os.system("cat {0}/dd_nweights {0}/dd_nvariables {0}/dd_nfactors {0}/dd_nedges | tr '\n' ',' > {0}/graph.meta".format(INPUTFOLDER))
-os.system("echo {0}/graph.weights,{0}/graph.variables,{0}/graph.factors,{0}/graph.edges >> {1}/graph.meta".format(OUTPUTFOLDER, INPUTFOLDER))
+os.system("cat {0}/dd_nweights {0}/dd_nvariables {0}/dd_nfactors {0}/dd_nedges {0}/dd_ntrees| tr '\n' ',' > {0}/graph.meta".format(INPUTFOLDER))
+os.system("echo {0}/graph.weights,{0}/graph.variables,{0}/graph.factors,{0}/graph.edges,{0}/cfg_rules >> {1}/graph.meta".format(OUTPUTFOLDER, INPUTFOLDER))
 
 if INPUTFOLDER != OUTPUTFOLDER:
     os.system("mv {0}/graph.meta {1}/graph.meta".format(INPUTFOLDER, OUTPUTFOLDER))

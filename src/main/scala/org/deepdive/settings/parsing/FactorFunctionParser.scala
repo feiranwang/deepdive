@@ -37,7 +37,6 @@ object FactorFunctionParser extends RegexParsers with Logging {
   def multinomialFactorFunction = ("Multinomial" | "MULTINOMIAL") ~> "(" ~> rep1sep(factorVariable, ",") <~ ")" ^^ { varList =>
     MultinomialFactorFunction(varList)
   }
-
   
   def factorVariable = ("!"?) ~ rep1sep(relationOrField, ".") ~ (arrayDefinition?) ~ 
     (("=" ~> equalPredicate)?) ^^ { 
