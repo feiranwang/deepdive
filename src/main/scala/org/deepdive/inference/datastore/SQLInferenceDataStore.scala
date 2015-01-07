@@ -638,7 +638,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       // tree node variables
       val treeNodeCols = dataType match {
         case TreeNodeType(x, y) => 
-          "treeid, " + y + ", " + (1 to y.toInt).map(i => s"start${i}, end${i}").mkString(", ")
+          ", treeid, " + y + ", " + (1 to y.toInt).map(i => s"start${i}, end${i}").mkString(", ")
         case _ => ""
       }
 
@@ -646,7 +646,7 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
         dbSettings, parallelGrounding,
         s"""SELECT t0.id, t1.${variableTypeColumn},
         CASE WHEN t1.${variableTypeColumn} = 0 THEN 0 ELSE ${initvalueCast} END AS initvalue,
-        ${variableDataType} AS type, ${cardinality} AS cardinality, 
+        ${variableDataType} AS type, ${cardinality} AS cardinality 
         ${treeNodeCols}
         FROM ${relation} t0, ${relation}_vtype t1
         WHERE t0.id=t1.id
