@@ -27,7 +27,7 @@ for l in open(INPUTFOLDER + "/dd_factormeta"):
   nvars = '%d' % len(positives)
 
   print "SPLITTING", factor_name, "..."
-  os.system('split -a 10 -l ' + CHUNKSIZE + ' ' + INPUTFOLDER + '/dd_factors_' + factor_name + '_out ' + INPUTFOLDER + '/dd_tmp/dd_factors_' + factor_name + '_out')
+  os.system('split -a 2 -l ' + CHUNKSIZE + ' ' + INPUTFOLDER + '/dd_factors_' + factor_name + '_out ' + INPUTFOLDER + '/dd_tmp/dd_factors_' + factor_name + '_out')
 
   print "BINARIZE ", factor_name, "..."
   os.system('ls ' + INPUTFOLDER + '/dd_tmp | egrep "^dd_factors_' + factor_name + '_out"  | xargs -P 40 -I {} -n 1 sh -c \'' + transform_script + ' factor ' + INPUTFOLDER + '/dd_tmp/{} ' + function_id + ' ' + nvars + ' ' + (' '.join(positives)) + ' \' | awk \'{s+=$1} END {printf \"%.0f\\n\", s}\' >>' + INPUTFOLDER + "/dd_nedges_")
