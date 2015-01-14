@@ -638,8 +638,8 @@ trait SQLInferenceDataStore extends InferenceDataStore with Logging {
       // tree node variables
       val treeNodeCols = dataType match {
         case TreeNodeType(x, y) => 
-          ", treeid, " + y + ", " + (1 to y.toInt).map(i => s"start${i}, end${i}").mkString(", ") 
-          + ", position, lower_bound, upper_bound"
+          ", treeid, " + y + ", " + (1 to y.toInt).map(i => s"start${i}, end${i}").mkString(", ") + 
+          ", position, lower_bound, upper_bound"
         case _ => ""
       }
 
