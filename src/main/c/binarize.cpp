@@ -62,6 +62,8 @@ void load_var(std::string filename){
       long treeid;
       short dim;
       int position;
+      int lower_bound;
+      int upper_bound;
       std::vector<int> spans;
       fin >> treeid >> dim;
       fout.write((char*)&treeid, 8);
@@ -75,7 +77,11 @@ void load_var(std::string filename){
         fout.write((char*)&length, 4);
       }
       fin >> position;
+      fin >> lower_bound;
+      fin >> upper_bound;
       fout.write((char*)&position, 4);
+      fout.write((char*)&lower_bound, 4);
+      fout.write((char*)&upper_bound, 4);
     }
   }
 
