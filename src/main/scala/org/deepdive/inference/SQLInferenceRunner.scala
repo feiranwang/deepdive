@@ -287,6 +287,8 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
       val cardinalityValues = dataType match {
         case BooleanType => "('00001')"
         case MultinomialType(x) => (0 to x-1).map (n => s"""('${"%05d".format(n)}')""").mkString(", ")
+        case RealNumberType => "('00000')"
+        case CensoredMultinomialType(x, _) => (0 to x-1).map (n => s"""('${"%05d".format(n)}')""").mkString(", ")
       }
       val cardinalityTableName = InferenceNamespace.getCardinalityTableName(relation, column)
       dataStore.dropAndCreateTable(cardinalityTableName, "cardinality text")
@@ -311,6 +313,8 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
       val cardinality = dataType match {
         case BooleanType => 2
         case MultinomialType(x) => x.toInt
+        case RealNumberType => 0
+        case CensoredMultinomialType(x, _) => x.toInt
       }
 
       // Create a table to denote variable type - query, evidence, observation
@@ -333,10 +337,24 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
         FROM ${relation} t0 LEFT OUTER JOIN ${VariablesHoldoutTable} t1 ON t0.id=t1.variable_id
         LEFT OUTER JOIN ${VariablesObservationTable} t2 ON t0.id=t2.variable_id""")
 
+      // Censored => 3
+      dataType match {
+        case CensoredMultinomialType(x, y) => execute(s"""UPDATE ${variableTypeTable}
+          SET ${variableTypeColumn} = 3
+          FROM ${relation} t0
+          WHERE t0.id = ${variableTypeTable}.id
+          AND ${variableTypeColumn} = 1
+          AND t0.${y} = TRUE;
+          """)
+        case _ =>
+      }
+
       // dump variables
-      val initvalueCast = dataStore.cast(dataStore.cast(column, "int"), "float")
-      // Sen
-      // du.unload(s"dd_variables_${relation}", s"${groundingPath}/dd_variables_${relation}",
+      val initvalueCast = dataType match {
+        case RealNumberType => dataStore.cast(column, "float")
+        case _ => dataStore.cast(dataStore.cast(column, "int"), "float")
+      }
+
       val groundingDir = getFileNameFromPath(groundingPath)
 
       val incCondition = dbSettings.incrementalMode match {
@@ -349,6 +367,7 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
         }
         case _ => ""
       }
+
       du.unload(InferenceNamespace.getVariableFileName(relation),
         s"${groundingPath}/${InferenceNamespace.getVariableFileName(relation)}",
         dbSettings,
@@ -671,60 +690,8 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
         case _ => ""
       }
 
-      if (factorDesc.func.getClass.getSimpleName != "MultinomialFactorFunction") {
-
-        // branch if weight variables present
-        val hasWeightVariables = !(isFixed || weightlist == "")
-        hasWeightVariables match {
-          // create a table that only contains one row (one weight)
-          case false => dataStore.dropAndCreateTableAs(weighttableForThisFactor,
-            s"""SELECT ${dataStore.cast(isFixed, "int")} AS isfixed, ${dataStore.cast(initvalue, "float")} AS initvalue,
-              ${dataStore.cast(-1, "bigint")} AS id;""")
-          // create one weight for each different element in weightlist.
-          case true => dataStore.dropAndCreateTableAs(weighttableForThisFactor,
-            s"""SELECT ${weightlist}, ${dataStore.cast(isFixed, "int")} AS isfixed,
-            ${dataStore.cast(initvalue, "float")} AS initvalue, ${dataStore.cast(-1, "bigint")} AS id
-            FROM ${querytable}
-            GROUP BY ${weightlist}""")
-        }
-
-        // assign weight id for incremental, use previous weight id if we have seen that weight before,
-        // otherwise, assign new id
-        cweightid += handleWeightIds("", false)
-
-        // maintain incremental meta data
-        updateIncWeightMeta()
-
-        // check null weight (only if there are weight variables)
-        if (hasWeightVariables) {
-          val weightChecklist = factorDesc.weight.variables.map(v => s""" ${dataStore.quoteColumn(v)} IS NULL """).mkString("AND")
-          issueQuery(s"SELECT COUNT(*) FROM ${querytable} WHERE ${weightChecklist}") { rs =>
-            if (rs.getLong(1) > 0) {
-              throw new RuntimeException("Weight variable has null values")
-            }
-          }
-        }
-
-        // dump factors
-        // do not have join conditions if there are no weight variables, and t1 will only have 1 row
-        val weightJoinCondition = hasWeightVariables match {
-          case true => "WHERE " + factorDesc.weight.variables.map(
-              v => s""" t0.${dataStore.quoteColumn(v)} = t1.${dataStore.quoteColumn(v)} """).mkString("AND")
-          case false => ""
-        }
-        execute(dataStore.analyzeTable(querytable))
-        execute(dataStore.analyzeTable(weighttableForThisFactor))
-
-        du.unload(s"${outfile}", s"${groundingPath}/${outfile}", dbSettings,
-          s"""SELECT DISTINCT t0.id AS factor_id, t1.id AS weight_id, ${idcols}
-           FROM ${querytable} t0, ${weighttableForThisFactor} t1
-           ${weightJoinCondition};""", groundingDir)
-
-        execute(s"""INSERT INTO ${WeightsTable}(id, isfixed, initvalue, description)
-          SELECT id, isfixed, initvalue, ${weightDesc} FROM ${weighttableForThisFactor}
-          ${incCondition};""")
-
-      } else if (factorDesc.func.getClass.getSimpleName == "MultinomialFactorFunction") {
+      factorDesc.func.getClass.getSimpleName match {
+      case "MultinomialFactorFunction" => {
         // TODO needs better code reuse
         // handle multinomial
         // generate cardinality table for each variable
@@ -842,6 +809,127 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
              FROM ${querytable} t0, ${weighttableForThisFactor} t1
              WHERE ${weightJoinlist} AND t1.cardinality = '${cardinalityKey}' ORDER BY t0.id;""",
              groundingDir)
+        }
+      }
+      case "MTLRFactorFunction" => {
+        factorDesc.func.variables.zipWithIndex.foreach { case(v,idx) =>
+          val cardinalityTableName = InferenceNamespace.getCardinalityInFactorTableName(
+            factorDesc.weightPrefix, idx)
+          dataStore.dropAndCreateTableAs(cardinalityTableName, s"""SELECT * FROM
+            ${InferenceNamespace.getCardinalityTableName(v.headRelation, v.field)};""")
+        }
+
+        // cardinality values used in weight
+        val cardinalityValues = factorDesc.func.variables.zipWithIndex.map { case(v,idx) =>
+          s"""_c${idx}.cardinality"""
+        }
+        val cardinalityTables = factorDesc.func.variables.zipWithIndex.map { case(v,idx) =>
+          s"${InferenceNamespace.getCardinalityInFactorTableName(factorDesc.weightPrefix, idx)} AS _c${idx}"
+        }
+        val cardinalityCmd = s"""${dataStore.concat(cardinalityValues,",")}"""
+
+        // feature indexes
+        dataStore.dropAndCreateTable(s"${weighttableForThisFactor}_index", "index int")
+        val weightValues = (0 to factorDesc.func.asInstanceOf[MTLRFactorFunction].featureDimension - 1) map
+          (x => s"(${x})") mkString(", ")
+        execute(s"INSERT INTO ${weighttableForThisFactor}_index VALUES ${weightValues}")
+
+        dataStore.dropAndCreateTableAs(weighttableForThisFactor, s"""
+          SELECT ${dataStore.cast(isFixed, "int")} AS isfixed, ${initvalue} AS initvalue,
+          t1.index, ${cardinalityCmd} AS cardinality, -1 AS id
+          FROM ${cardinalityTables.mkString(", ")}, ${weighttableForThisFactor}_index t1
+          ORDER BY index, cardinality""")
+
+        val count = handleWeightIds("ORDER BY index, cardinality", true)
+
+        execute(s"""INSERT INTO ${WeightsTable}(id, isfixed, initvalue, cardinality, description)
+          SELECT id, isfixed, initvalue, cardinality, ${weightDesc} FROM ${weighttableForThisFactor}
+          ${incCondition};""")
+
+        execute(dataStore.analyzeTable(querytable))
+        execute(dataStore.analyzeTable(weighttableForThisFactor))
+
+        du.unload(s"${outfile}", s"${groundingPath}/${outfile}", dbSettings,
+          s"""SELECT t0.id AS factor_id, t1.id AS weight_id, ${idcols}
+           FROM ${querytable} t0, ${weighttableForThisFactor} t1
+           WHERE t0.index = t1.index
+           AND t1.cardinality = '${factorDesc.func.variables.map(v => "00000").mkString(",")}';""",
+           groundingDir)
+
+      }
+      case "LRFactorFunction" => {
+        dataStore.dropAndCreateTable(weighttableForThisFactor, "index int, isfixed int, initvalue float, id bigint")
+        val weightValues = (0 to factorDesc.func.asInstanceOf[LRFactorFunction].featureDimension - 1) map
+          (x => s"(${x}, 0, 0, -1)") mkString(", ")
+        execute(s"INSERT INTO ${weighttableForThisFactor} VALUES ${weightValues}")
+
+        cweightid += handleWeightIds("", false)
+
+        execute(dataStore.analyzeTable(querytable))
+        execute(dataStore.analyzeTable(weighttableForThisFactor))
+
+        du.unload(s"${outfile}", s"${groundingPath}/${outfile}", dbSettings,
+          s"""SELECT t0.id AS factor_id, t1.id AS weight_id, ${idcols}
+           FROM ${querytable} t0, ${weighttableForThisFactor} t1
+           WHERE t0.index = t1.index""", groundingDir)
+
+        execute(s"""INSERT INTO ${WeightsTable}(id, isfixed, initvalue, description)
+          SELECT id, isfixed, initvalue, ${dataStore.concat(Seq(s"'${factorDesc.weightPrefix}-'", dataStore.cast("index", "text")), "")}
+          FROM ${weighttableForThisFactor}""")
+      }
+      case _ => {
+
+        // branch if weight variables present
+        val hasWeightVariables = !(isFixed || weightlist == "")
+        hasWeightVariables match {
+          // create a table that only contains one row (one weight)
+          case false => dataStore.dropAndCreateTableAs(weighttableForThisFactor,
+            s"""SELECT ${dataStore.cast(isFixed, "int")} AS isfixed, ${dataStore.cast(initvalue, "float")} AS initvalue,
+              ${dataStore.cast(-1, "bigint")} AS id;""")
+          // create one weight for each different element in weightlist.
+          case true => dataStore.dropAndCreateTableAs(weighttableForThisFactor,
+            s"""SELECT ${weightlist}, ${dataStore.cast(isFixed, "int")} AS isfixed,
+            ${dataStore.cast(initvalue, "float")} AS initvalue, ${dataStore.cast(-1, "bigint")} AS id
+            FROM ${querytable}
+            GROUP BY ${weightlist}""")
+        }
+
+        // assign weight id for incremental, use previous weight id if we have seen that weight before,
+        // otherwise, assign new id
+        cweightid += handleWeightIds("", false)
+
+        // maintain incremental meta data
+        updateIncWeightMeta()
+
+        // check null weight (only if there are weight variables)
+        if (hasWeightVariables) {
+          val weightChecklist = factorDesc.weight.variables.map(v => s""" ${dataStore.quoteColumn(v)} IS NULL """).mkString("AND")
+          issueQuery(s"SELECT COUNT(*) FROM ${querytable} WHERE ${weightChecklist}") { rs =>
+            if (rs.getLong(1) > 0) {
+              throw new RuntimeException("Weight variable has null values")
+            }
+          }
+        }
+
+        // dump factors
+        // do not have join conditions if there are no weight variables, and t1 will only have 1 row
+        val weightJoinCondition = hasWeightVariables match {
+          case true => "WHERE " + factorDesc.weight.variables.map(
+              v => s""" t0.${dataStore.quoteColumn(v)} = t1.${dataStore.quoteColumn(v)} """).mkString("AND")
+          case false => ""
+        }
+        execute(dataStore.analyzeTable(querytable))
+        execute(dataStore.analyzeTable(weighttableForThisFactor))
+
+        du.unload(s"${outfile}", s"${groundingPath}/${outfile}", dbSettings,
+          s"""SELECT t0.id AS factor_id, t1.id AS weight_id, ${idcols}
+           FROM ${querytable} t0, ${weighttableForThisFactor} t1
+           ${weightJoinCondition};""", groundingDir)
+
+        execute(s"""INSERT INTO ${WeightsTable}(id, isfixed, initvalue, description)
+          SELECT id, isfixed, initvalue, ${weightDesc} FROM ${weighttableForThisFactor}
+          ${incCondition};""")
+
         }
       }
     }
@@ -1022,8 +1110,9 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
     dataType match {
       case BooleanType =>
         execute(createCalibrationViewBooleanSQL(calibrationViewName, bucketedViewName, columnName))
-      case MultinomialType(_) =>
+      case MultinomialType(_) | CensoredMultinomialType(_, _) =>
         execute(createCalibrationViewMultinomialSQL(calibrationViewName, bucketedViewName, columnName))
+      case _ => return (buckets map ( bucket => (bucket, BucketData(0,0,0)))).toMap
     }
 
     val bucketData = dataStore.selectAsMap(selectCalibrationDataSQL(calibrationViewName)).map { row =>

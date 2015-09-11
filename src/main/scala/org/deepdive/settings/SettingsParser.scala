@@ -6,7 +6,7 @@ import org.deepdive.{Context, Logging}
 import scala.collection.JavaConversions._
 import scala.language.postfixOps
 import scala.util.Try
-import scala.util.parsing.combinator.RegexParsers
+import scala.util.parsing.combinator._
 
 object SettingsParser extends Logging {
 
@@ -388,12 +388,17 @@ object SettingsParser extends Logging {
   }
 }
 
-object DataTypeParser extends RegexParsers {
+object DataTypeParser extends JavaTokenParsers {
   def CategoricalParser = "Categorical" ~> "(" ~> """\d+""".r <~ ")" ^^ { n => MultinomialType(n.toInt) }
 
   def BooleanParser = "Boolean" ^^ { s => BooleanType }
 
-  def dataType = CategoricalParser | BooleanParser
+  def RealNumberParser = "RealNumber" ^^ { s => RealNumberType }
+  def CensoredMultinomialParser = "CensoredMultinomial" ~> "(" ~> wholeNumber ~ "," ~ ident <~ ")" ^^ {
+    case (cardinality ~ _ ~ isCensoredColumn) => CensoredMultinomialType(cardinality.toInt, isCensoredColumn)
+  }
+
+  def dataType = CategoricalParser | BooleanParser | RealNumberParser | CensoredMultinomialParser
 
   def parseVariableType(dataTypeStr: String): VariableDataType with Product with Serializable = {
     DataTypeParser.parse(DataTypeParser.dataType, dataTypeStr).getOrElse {
@@ -403,7 +408,7 @@ object DataTypeParser extends RegexParsers {
 
 }
 
-object FactorFunctionParser extends RegexParsers with Logging {
+object FactorFunctionParser extends JavaTokenParsers with Logging {
   def relationOrField = """[\w]+""".r
 
   def arrayDefinition = """\[\]""".r
@@ -451,6 +456,14 @@ object FactorFunctionParser extends RegexParsers with Logging {
     LogicalFactorFunction(varList)
   }
 
+  def lrFactorFunction = ("LR") ~> ("(" ~> wholeNumber <~ ")") ~ ("(" ~> rep1sep(factorVariable, ",") <~ ")") ^^ { case (dim ~ varList) =>
+    LRFactorFunction(varList, dim.toInt)
+  }
+
+  def mtlrFactorFunction = ("MTLR") ~> ("(" ~> wholeNumber <~ ")") ~ ("(" ~> rep1sep(factorVariable, ",") <~ ")") ^^ { case (dim ~ varList) =>
+    MTLRFactorFunction(varList, dim.toInt)
+  }
+
   def factorVariable = ("!" ?) ~ rep1sep(relationOrField, ".") ~ (arrayDefinition ?) ~
     (("=" ~> equalPredicate) ?) ^^ {
     case (isNegated ~ varList ~ isArray ~ predicate) =>
@@ -472,7 +485,7 @@ object FactorFunctionParser extends RegexParsers with Logging {
 
   def factorFunc = implyFactorFunction | orFactorFunction | andFactorFunction |
     equalFactorFunction | isTrueFactorFunction | xorFactorFunction | multinomialFactorFunction |
-    linearFactorFunction | ratioFactorFunction | logicalFactorFunction
+    linearFactorFunction | ratioFactorFunction | logicalFactorFunction | lrFactorFunction | mtlrFactorFunction
 
 
   def parseFactorFunction(factorFunction: String): FactorFunction with Product with Serializable = {

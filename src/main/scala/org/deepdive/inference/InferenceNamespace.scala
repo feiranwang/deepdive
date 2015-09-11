@@ -47,6 +47,8 @@ object InferenceNamespace {
     variable match {
       case BooleanType => 0
       case MultinomialType(x) => 1
+      case RealNumberType => 2
+      case CensoredMultinomialType(_,_) => 3
     }
   }
 
@@ -62,6 +64,8 @@ object InferenceNamespace {
       case "LinearFactorFunction" => 7
       case "RatioFactorFunction" => 8
       case "LogicalFactorFunction" => 9
+      case "LRFactorFunction" => 10
+      case "MTLRFactorFunction" => 12
     }
   }
 
