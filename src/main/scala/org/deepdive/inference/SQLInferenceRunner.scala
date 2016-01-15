@@ -288,6 +288,7 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
         case BooleanType => "('00001')"
         case MultinomialType(x) => (0 to x-1).map (n => s"""('${"%05d".format(n)}')""").mkString(", ")
         case RealNumberType => "('00000')"
+        case CensoredMultinomialType(x, _) => (0 to x-1).map (n => s"""('${"%05d".format(n)}')""").mkString(", ")
       }
       val cardinalityTableName = InferenceNamespace.getCardinalityTableName(relation, column)
       dataStore.dropAndCreateTable(cardinalityTableName, "cardinality text")
@@ -313,6 +314,7 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
         case BooleanType => 2
         case MultinomialType(x) => x.toInt
         case RealNumberType => 0
+        case CensoredMultinomialType(x, _) => x.toInt
       }
 
       // Create a table to denote variable type - query, evidence, observation
@@ -334,6 +336,18 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
                       END as ${variableTypeColumn}
         FROM ${relation} t0 LEFT OUTER JOIN ${VariablesHoldoutTable} t1 ON t0.id=t1.variable_id
         LEFT OUTER JOIN ${VariablesObservationTable} t2 ON t0.id=t2.variable_id""")
+
+      // evidence & censored => 3
+      dataType match {
+        case CensoredMultinomialType(x, y) => execute(s"""UPDATE ${variableTypeTable}
+          SET ${variableTypeColumn} = 3
+          FROM ${relation} t0
+          WHERE t0.id = ${variableTypeTable}.id
+          AND ${variableTypeColumn} = 1
+          AND t0.${y} = TRUE;
+          """)
+        case _ =>
+      }
 
       // dump variables
       // val initvalueCast = dataStore.cast(dataStore.cast(column, "int"), "float")
@@ -824,6 +838,58 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
              WHERE ${weightJoinlist} AND t1.cardinality = '${cardinalityKey}' ORDER BY t0.id;""",
              groundingDir)
         }
+
+      case "MTLRFactorFunction" => {
+        factorDesc.func.variables.zipWithIndex.foreach { case(v,idx) =>
+          val cardinalityTableName = InferenceNamespace.getCardinalityInFactorTableName(
+            factorDesc.weightPrefix, idx)
+          dataStore.dropAndCreateTableAs(cardinalityTableName, s"""SELECT * FROM
+            ${InferenceNamespace.getCardinalityTableName(v.headRelation, v.field)};""")
+        }
+
+        // cardinality values used in weight
+        val cardinalityValues = factorDesc.func.variables.zipWithIndex.map { case(v,idx) =>
+          s"""_c${idx}.cardinality"""
+        }
+        val cardinalityTables = factorDesc.func.variables.zipWithIndex.map { case(v,idx) =>
+          s"${InferenceNamespace.getCardinalityInFactorTableName(factorDesc.weightPrefix, idx)} AS _c${idx}"
+        }
+        val cardinalityCmd = s"""${dataStore.concat(cardinalityValues,",")}"""
+
+        // feature indexes
+        dataStore.dropAndCreateTable(s"${weighttableForThisFactor}_index", "index int")
+        var dim = 0
+        issueQuery(s"SELECT MAX(index) FROM ${querytable}") {
+          rs => dim = rs.getInt(1) + 1
+        }
+        val weightValues = (0 to dim - 1) map (x => s"(${x})") mkString(", ")
+        execute(s"INSERT INTO ${weighttableForThisFactor}_index VALUES ${weightValues}")
+
+        dataStore.dropAndCreateTableAs(weighttableForThisFactor, s"""
+          SELECT ${dataStore.cast(isFixed, "int")} AS isfixed, ${initvalue} AS initvalue,
+          t1.index, ${cardinalityCmd} AS cardinality, -1 AS id
+          FROM ${cardinalityTables.mkString(", ")}, ${weighttableForThisFactor}_index t1
+          ORDER BY index, cardinality""")
+
+        val count = handleWeightIds("ORDER BY index, cardinality", true)
+
+        execute(s"""INSERT INTO ${WeightsTable}(id, isfixed, initvalue, cardinality, description)
+          SELECT id, isfixed, initvalue, cardinality, ${weightDesc} FROM ${weighttableForThisFactor}
+          ${incCondition};""")
+
+        execute(dataStore.analyzeTable(querytable))
+        execute(dataStore.analyzeTable(weighttableForThisFactor))
+
+        du.unload(s"${outfile}", s"${groundingPath}/${outfile}", dbSettings,
+          s"""SELECT t0.id AS factor_id, t1.id AS weight_id, ${idcols}
+           FROM ${querytable} t0, ${weighttableForThisFactor} t1
+           WHERE t0.index = t1.index
+           AND t1.cardinality = '${factorDesc.func.variables.map(v => "00000").mkString(",")}';""",
+           groundingDir)
+
+      }
+
+
       case _ =>
         // branch if weight variables present
         val hasWeightVariables = !(isFixed || weightlist == "")
@@ -877,7 +943,6 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
         execute(s"""INSERT INTO ${WeightsTable}(id, isfixed, initvalue, description)
           SELECT id, isfixed, initvalue, ${weightDesc} FROM ${weighttableForThisFactor}
           ${incCondition};""")
-
       }
 
     }
@@ -1187,7 +1252,7 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
     dataType match {
       case BooleanType =>
         execute(createCalibrationViewBooleanSQL(calibrationViewName, bucketedViewName, columnName))
-      case MultinomialType(_) =>
+      case MultinomialType(_) | CensoredMultinomialType(_, _) =>
         execute(createCalibrationViewMultinomialSQL(calibrationViewName, bucketedViewName, columnName))
       case RealNumberType =>
         return (buckets map ( bucket => (bucket, BucketData(0,0,0)))).toMap

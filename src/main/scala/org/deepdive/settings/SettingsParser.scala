@@ -409,7 +409,11 @@ object DataTypeParser extends JavaTokenParsers {
   def BooleanParser = "Boolean" ^^ { s => BooleanType }
   def RealNumberParser = "RealNumber" ^^ { s => RealNumberType }
 
-  def dataType = CategoricalParser | BooleanParser | RealNumberParser
+  def CensoredMultinomialParser = "CensoredMultinomial" ~> "(" ~> wholeNumber ~ "," ~ ident <~ ")" ^^ {
+    case (cardinality ~ _ ~ isCensoredColumn) => CensoredMultinomialType(cardinality.toInt, isCensoredColumn)
+  }
+
+  def dataType = CategoricalParser | BooleanParser | RealNumberParser | CensoredMultinomialParser
 
   def parseVariableType(dataTypeStr: String): VariableDataType with Product with Serializable = {
     DataTypeParser.parse(DataTypeParser.dataType, dataTypeStr).getOrElse {
@@ -471,6 +475,10 @@ object FactorFunctionParser extends JavaTokenParsers with Logging {
     LRFactorFunction(varList)
   }
 
+  def mtlrFactorFunction = ("MTLR") ~> ("(" ~> rep1sep(factorVariable, ",") <~ ")") ^^ { varList =>
+    MTLRFactorFunction(varList)
+  }
+
   def factorVariable = ("!" ?) ~ rep1sep(relationOrField, ".") ~ (arrayDefinition ?) ~
     (("=" ~> equalPredicate) ?) ^^ {
     case (isNegated ~ varList ~ isArray ~ predicate) =>
@@ -492,7 +500,7 @@ object FactorFunctionParser extends JavaTokenParsers with Logging {
 
   def factorFunc = implyFactorFunction | orFactorFunction | andFactorFunction |
     equalFactorFunction | isTrueFactorFunction | xorFactorFunction | multinomialFactorFunction |
-    linearFactorFunction | ratioFactorFunction | logicalFactorFunction | lrFactorFunction
+    linearFactorFunction | ratioFactorFunction | logicalFactorFunction | lrFactorFunction | mtlrFactorFunction
 
 
   def parseFactorFunction(factorFunction: String): FactorFunction with Product with Serializable = {
