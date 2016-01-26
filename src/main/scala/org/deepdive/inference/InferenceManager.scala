@@ -110,7 +110,7 @@ trait InferenceManager extends Actor with ActorLogging {
     }
     factorDescs.filter(_.mode == Some("cnn_pretrained")).foreach { f =>
       val iter = io.Source.fromFile(s"${Context.outputDir}/cnn.config.${f.port.get}").mkString.split("\n")(2).toInt
-      val cmdStr = s"caffe test -model ${Context.outputDir}/train_test.prototxt -gpu ${f.gpu.get} -weights ${f.cnnConfig(2)} -iterations ${iter}"
+      val cmdStr = s"caffe train -model ${Context.outputDir}/train_test.prototxt -gpu ${f.gpu.get} -weights ${f.cnnConfig(2)}"
       log.info(cmdStr)
       val cmd = Process(cmdStr, None, "PORT" -> f.port.get.toString)
       val caffe = cmd.run
