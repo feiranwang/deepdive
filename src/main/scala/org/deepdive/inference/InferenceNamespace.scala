@@ -49,6 +49,7 @@ object InferenceNamespace {
       case MultinomialType(x) => 1
       case RealNumberType => 2
       case CensoredMultinomialType(_,_) => 3
+      case SurvivalType(_) => 4
     }
   }
 

@@ -289,6 +289,7 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
         case MultinomialType(x) => (0 to x-1).map (n => s"""('${"%05d".format(n)}')""").mkString(", ")
         case RealNumberType => "('00000')"
         case CensoredMultinomialType(x, _) => (0 to x-1).map (n => s"""('${"%05d".format(n)}')""").mkString(", ")
+        case _ => "('00000')"
       }
       val cardinalityTableName = InferenceNamespace.getCardinalityTableName(relation, column)
       dataStore.dropAndCreateTable(cardinalityTableName, "cardinality text")
@@ -315,6 +316,7 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
         case MultinomialType(x) => x.toInt
         case RealNumberType => 0
         case CensoredMultinomialType(x, _) => x.toInt
+        case _ => 0
       }
 
       // Create a table to denote variable type - query, evidence, observation
@@ -338,14 +340,18 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
         LEFT OUTER JOIN ${VariablesObservationTable} t2 ON t0.id=t2.variable_id""")
 
       // evidence & censored => 3
-      dataType match {
-        case CensoredMultinomialType(x, y) => execute(s"""UPDATE ${variableTypeTable}
+      def handleCensoring(x: String) {
+        execute(s"""UPDATE ${variableTypeTable}
           SET ${variableTypeColumn} = 3
           FROM ${relation} t0
           WHERE t0.id = ${variableTypeTable}.id
           AND ${variableTypeColumn} = 1
-          AND t0.${y} = TRUE;
+          AND t0.${x}::INT = 1;
           """)
+      }
+      dataType match {
+        case CensoredMultinomialType(_, x) => handleCensoring(x)
+        case SurvivalType(x) => handleCensoring(x)
         case _ =>
       }
 
@@ -1040,6 +1046,7 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
         WHERE t0.id = t1.id""")
 
       var nTrain : Long = 0
+      var nTest : Long = 0
 
       if (!isPretrained) {
         du.unload(train_listfile,
@@ -1050,6 +1057,9 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
         issueQuery(s"SELECT COUNT(*) FROM ${cnn_table} WHERE type != 0") { rs =>
           nTrain = rs.getLong(1)
         }
+        issueQuery(s"SELECT COUNT(*) FROM ${cnn_table} WHERE type = 0") { rs =>
+          nTest = rs.getLong(1)
+        }
       }
 
       du.unload(test_listfile,
@@ -1057,6 +1067,17 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
         s"""SELECT file, label, id FROM ${cnn_table} WHERE type = 0""",
         groundingDir)
 
+
+      // generate config files
+      if (!isPretrained) {
+        Helpers.executeCmd(Seq("sed", s"""s#TRAIN_TEST_PROTOTXT#"${groundingPath}/train_test.prototxt"#g""", factorDesc.cnnConfig(0)) #> new java.io.File(s"${groundingPath}/solver.prototxt"))
+      }
+      Helpers.executeCmd(Seq("sed",
+        s"""s#TRAIN_LMDB#"${groundingPath}/${train_lmdb}"#g;""" +
+        s"""s#TEST_LMDB#"${groundingPath}/${test_lmdb}"#g;""" +
+        s"""s#IMAGE_MEAN#"${groundingPath}/${imageMean}"#g;""" +
+        s"s#NUM_OUTPUT#${schema.variables.get(variable.key).get.cardinality}#g",
+        factorDesc.cnnConfig(1)) #> new java.io.File(s"${groundingPath}/train_test.prototxt"))
 
       // config files for the sampler
       val configFile = s"cnn.config.${factorDesc.port.get}"
@@ -1083,18 +1104,6 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
         pw.write("0\n0\n")
       }
       pw.close()
-
-
-      // generate config files
-      if (!isPretrained) {
-        Helpers.executeCmd(Seq("sed", s"""s#TRAIN_TEST_PROTOTXT#"${groundingPath}/train_test.prototxt"#g""", factorDesc.cnnConfig(0)) #> new java.io.File(s"${groundingPath}/solver.prototxt"))
-      }
-      Helpers.executeCmd(Seq("sed",
-        s"""s#TRAIN_LMDB#"${groundingPath}/${train_lmdb}"#g;""" +
-        s"""s#TEST_LMDB#"${groundingPath}/${test_lmdb}"#g;""" +
-        s"""s#IMAGE_MEAN#"${groundingPath}/${imageMean}"#g;""" +
-        s"s#NUM_OUTPUT#${schema.variables.get(variable.key).get.cardinality}#g",
-        factorDesc.cnnConfig(1)) #> new java.io.File(s"${groundingPath}/train_test.prototxt"))
 
       // lmdb
       Helpers.executeCmd(s"convert_imageset_withid --shuffle ${path}/ ${groundingPath}/${test_listfile} ${groundingPath}/${test_lmdb}")
@@ -1254,7 +1263,7 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
         execute(createCalibrationViewBooleanSQL(calibrationViewName, bucketedViewName, columnName))
       case MultinomialType(_) | CensoredMultinomialType(_, _) =>
         execute(createCalibrationViewMultinomialSQL(calibrationViewName, bucketedViewName, columnName))
-      case RealNumberType =>
+      case _ =>
         return (buckets map ( bucket => (bucket, BucketData(0,0,0)))).toMap
     }
 
