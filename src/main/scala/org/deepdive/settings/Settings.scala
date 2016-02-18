@@ -256,3 +256,7 @@ case object RealNumberType extends VariableDataType {
 }
 
 case class CensoredMultinomialType(cardinality: Int, isCensoredColumn: String) extends VariableDataType
+
+case class SurvivalType(isCensoredColumn: String) extends VariableDataType {
+  override def cardinality = 0
+}

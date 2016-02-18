@@ -289,6 +289,7 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
         case MultinomialType(x) => (0 to x-1).map (n => s"""('${"%05d".format(n)}')""").mkString(", ")
         case RealNumberType => "('00000')"
         case CensoredMultinomialType(x, _) => (0 to x-1).map (n => s"""('${"%05d".format(n)}')""").mkString(", ")
+        case _ => "('00000')"
       }
       val cardinalityTableName = InferenceNamespace.getCardinalityTableName(relation, column)
       dataStore.dropAndCreateTable(cardinalityTableName, "cardinality text")
@@ -315,6 +316,7 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
         case MultinomialType(x) => x.toInt
         case RealNumberType => 0
         case CensoredMultinomialType(x, _) => x.toInt
+        case _ => 0
       }
 
       // Create a table to denote variable type - query, evidence, observation
@@ -338,14 +340,18 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
         LEFT OUTER JOIN ${VariablesObservationTable} t2 ON t0.id=t2.variable_id""")
 
       // evidence & censored => 3
-      dataType match {
-        case CensoredMultinomialType(x, y) => execute(s"""UPDATE ${variableTypeTable}
+      def handleCensoring(x: String) {
+        execute(s"""UPDATE ${variableTypeTable}
           SET ${variableTypeColumn} = 3
           FROM ${relation} t0
           WHERE t0.id = ${variableTypeTable}.id
           AND ${variableTypeColumn} = 1
-          AND t0.${y} = TRUE;
+          AND t0.${x}::INT = 1;
           """)
+      }
+      dataType match {
+        case CensoredMultinomialType(_, x) => handleCensoring(x)
+        case SurvivalType(x) => handleCensoring(x)
         case _ =>
       }
 
@@ -1254,7 +1260,7 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
         execute(createCalibrationViewBooleanSQL(calibrationViewName, bucketedViewName, columnName))
       case MultinomialType(_) | CensoredMultinomialType(_, _) =>
         execute(createCalibrationViewMultinomialSQL(calibrationViewName, bucketedViewName, columnName))
-      case RealNumberType =>
+      case _ =>
         return (buckets map ( bucket => (bucket, BucketData(0,0,0)))).toMap
     }
 

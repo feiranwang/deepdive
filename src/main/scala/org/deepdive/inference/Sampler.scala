@@ -77,7 +77,7 @@ class Sampler extends Actor with ActorLogging {
           "-j", outputDir) ++ samplerOptions.split(" ")
       case _ =>
         samplerCmd.split(" ").toSeq ++ Seq(
-          "gibbs",
+          "cox",
           "-w", weightsFile,
           "-v", variablesFile,
           "-f", factorsFile,

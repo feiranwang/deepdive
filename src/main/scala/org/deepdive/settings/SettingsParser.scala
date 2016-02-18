@@ -413,7 +413,9 @@ object DataTypeParser extends JavaTokenParsers {
     case (cardinality ~ _ ~ isCensoredColumn) => CensoredMultinomialType(cardinality.toInt, isCensoredColumn)
   }
 
-  def dataType = CategoricalParser | BooleanParser | RealNumberParser | CensoredMultinomialParser
+  def SurvivalParser = "Survival" ~> "(" ~> ident <~ ")" ^^ { s => SurvivalType(s) }
+
+  def dataType = CategoricalParser | BooleanParser | RealNumberParser | CensoredMultinomialParser | SurvivalParser
 
   def parseVariableType(dataTypeStr: String): VariableDataType with Product with Serializable = {
     DataTypeParser.parse(DataTypeParser.dataType, dataTypeStr).getOrElse {
