@@ -1008,9 +1008,7 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
     val labelSchema = schema.variables.keys.map(v => v.split('.')(0) -> v.split('.')(1)).toMap
 
     // ground each cnn
-    factorDescs.filter(x => x.mode == Some("cnn") || x.mode == Some("cnn_pretrained")).foreach { case factorDesc =>
-
-      val isPretrained = factorDesc.mode == Some("cnn_pretrained")
+    factorDescs.filter(x => x.mode == Some("cnn") || x.mode == Some("cnn_finetune")).foreach { case factorDesc =>
 
       log.info("Generating cnn files for " + factorDesc.name)
 
@@ -1048,18 +1046,16 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
       var nTrain : Long = 0
       var nTest : Long = 0
 
-      if (!isPretrained) {
-        du.unload(train_listfile,
-          s"${groundingPath}/${train_listfile}", dbSettings,
-          s"""SELECT file, label, id FROM ${cnn_table} WHERE type != 0""",
-          groundingDir)
+      du.unload(train_listfile,
+        s"${groundingPath}/${train_listfile}", dbSettings,
+        s"""SELECT file, label, id FROM ${cnn_table} WHERE type != 0""",
+        groundingDir)
 
-        issueQuery(s"SELECT COUNT(*) FROM ${cnn_table} WHERE type != 0") { rs =>
-          nTrain = rs.getLong(1)
-        }
-        issueQuery(s"SELECT COUNT(*) FROM ${cnn_table} WHERE type = 0") { rs =>
-          nTest = rs.getLong(1)
-        }
+      issueQuery(s"SELECT COUNT(*) FROM ${cnn_table} WHERE type != 0") { rs =>
+        nTrain = rs.getLong(1)
+      }
+      issueQuery(s"SELECT COUNT(*) FROM ${cnn_table} WHERE type = 0") { rs =>
+        nTest = rs.getLong(1)
       }
 
       du.unload(test_listfile,
@@ -1069,9 +1065,7 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
 
 
       // generate config files
-      if (!isPretrained) {
-        Helpers.executeCmd(Seq("sed", s"""s#TRAIN_TEST_PROTOTXT#"${groundingPath}/train_test.prototxt"#g""", factorDesc.cnnConfig(0)) #> new java.io.File(s"${groundingPath}/solver.prototxt"))
-      }
+      Helpers.executeCmd(Seq("sed", s"""s#TRAIN_TEST_PROTOTXT#"${groundingPath}/train_test.prototxt"#g""", factorDesc.cnnConfig(0)) #> new java.io.File(s"${groundingPath}/solver.prototxt"))
       Helpers.executeCmd(Seq("sed",
         s"""s#TRAIN_LMDB#"${groundingPath}/${train_lmdb}"#g;""" +
         s"""s#TEST_LMDB#"${groundingPath}/${test_lmdb}"#g;""" +
@@ -1084,33 +1078,23 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
       val pw = new PrintWriter(new File(s"${groundingPath}/${configFile}"))
       // from the solver.prototxt, find the number of iterations...
       // TODO this is unreliable, comments could mess things up
-      if (!isPretrained) {
-        val lines = io.Source.fromFile(factorDesc.cnnConfig(0)).getLines.map(_.trim).filterNot(_.startsWith("#")).mkString("\n")
-        val trainIteration = "max_iter[^:]*:.*".r.findFirstIn(lines).get.split(":")(1).trim
-        val testIteration = "test_iter[^:]*:.*".r.findFirstIn(lines).get.split(":")(1).trim
-        val testInterval = "test_interval[^:]*:.*".r.findFirstIn(lines).get.split(":")(1).trim
-        val lines2 = io.Source.fromFile(factorDesc.cnnConfig(1)).getLines.map(_.trim).filterNot(_.startsWith("#")).mkString("\n")
-        val batch_size = "batch_size[^:]*:.*".r.findFirstIn(lines2).get.split(":")(1).trim
-        pw.write(nTrain.toString + "\n")
-        pw.write(trainIteration + "\n")
-        pw.write(testIteration + "\n")
-        pw.write(testInterval + "\n")
-        pw.write(batch_size + "\n")
-      } else {
-        val lines = io.Source.fromFile(factorDesc.cnnConfig(0)).getLines.map(_.trim).filterNot(_.startsWith("#")).mkString("\n")
-        val testIteration = "test_iter[^:]*:.*".r.findFirstIn(lines).get.split(":")(1).trim
-        pw.write("0\n0\n")
-        pw.write(testIteration + "\n")
-        pw.write("0\n0\n")
-      }
+      val lines = io.Source.fromFile(factorDesc.cnnConfig(0)).getLines.map(_.trim).filterNot(_.startsWith("#")).mkString("\n")
+      val trainIteration = "max_iter[^:]*:.*".r.findFirstIn(lines).get.split(":")(1).trim
+      val testIteration = "test_iter[^:]*:.*".r.findFirstIn(lines).get.split(":")(1).trim
+      val testInterval = "test_interval[^:]*:.*".r.findFirstIn(lines).get.split(":")(1).trim
+      val lines2 = io.Source.fromFile(factorDesc.cnnConfig(1)).getLines.map(_.trim).filterNot(_.startsWith("#")).mkString("\n")
+      val batch_size = "batch_size[^:]*:.*".r.findFirstIn(lines2).get.split(":")(1).trim
+      pw.write(nTrain.toString + "\n")
+      pw.write(trainIteration + "\n")
+      pw.write(testIteration + "\n")
+      pw.write(testInterval + "\n")
+      pw.write(batch_size + "\n")
       pw.close()
 
       // lmdb
+      Helpers.executeCmd(s"convert_imageset_withid --shuffle ${path}/ ${groundingPath}/${train_listfile} ${groundingPath}/${train_lmdb}")
+      Helpers.executeCmd(s"compute_image_mean ${groundingPath}/${train_lmdb} ${groundingPath}/${imageMean}")
       Helpers.executeCmd(s"convert_imageset_withid --shuffle ${path}/ ${groundingPath}/${test_listfile} ${groundingPath}/${test_lmdb}")
-      if (!isPretrained) {
-        Helpers.executeCmd(s"convert_imageset_withid --shuffle ${path}/ ${groundingPath}/${train_listfile} ${groundingPath}/${train_lmdb}")
-        Helpers.executeCmd(s"compute_image_mean ${groundingPath}/${train_lmdb} ${groundingPath}/${imageMean}")
-      }
 
     }
 
@@ -1118,7 +1102,7 @@ trait SQLInferenceRunner extends InferenceRunner with Logging {
     val portFile = new java.io.File(s"${groundingPath}/cnn.ports")
     log.info(s"Writing port information to ${groundingPath}/cnn.ports")
     val pw = new PrintWriter(new File(s"${groundingPath}/cnn.ports"))
-    factorDescs.filter(x => x.mode == Some("cnn") || x.mode == Some("cnn_pretrained")).foreach { f =>
+    factorDescs.filter(x => x.mode == Some("cnn") || x.mode == Some("cnn_finetune")).foreach { f =>
       pw.write(f.port.get.toString + "\n")
     }
     pw.close()
